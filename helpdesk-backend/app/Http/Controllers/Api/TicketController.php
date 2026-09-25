@@ -135,6 +135,21 @@ class TicketController extends Controller
             ->when($request->filled('prioritas'), fn ($query) => $query->where('prioritas', $request->input('prioritas')));
     }
 
+    private function handleLampiranUpload(Request $request, ?Ticket $ticket = null, array &$validated = []): ?string
+    {
+        if (!$request->hasFile('lampiran')) {
+            return $ticket?->lampiran;
+        }
+
+        if ($ticket?->lampiran && Storage::disk('public')->exists($ticket->lampiran)) {
+            Storage::disk('public')->delete($ticket->lampiran);
+        }
+
+        $validated['lampiran'] = $request->file('lampiran')->store('lampiran_tiket', 'public');
+
+        return $validated['lampiran'];
+    }
+
     public function store(Request $request)
     {
         $userId = $request->user() ? $request->user()->id : $request->input('user_id');
@@ -145,13 +160,10 @@ class TicketController extends Controller
             'judul'         => 'required|string|max:255',
             'deskripsi'     => 'required|string',
             'prioritas'     => 'nullable|in:low,medium,high,urgent',
-            'lampiran'      => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx|max:2048',
+            'lampiran'      => 'nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx|max:5120',
         ]);
 
-        $lampiranPath = null;
-        if ($request->hasFile('lampiran')) {
-            $lampiranPath = $request->file('lampiran')->store('lampiran_tiket', 'public');
-        }
+        $lampiranPath = $this->handleLampiranUpload($request, null, $validated);
 
         $ticket = Ticket::create([
             'nomor_tiket'   => 'TK-' . strtoupper(uniqid()),
@@ -186,7 +198,12 @@ class TicketController extends Controller
             'deskripsi' => 'sometimes|string',
             'comment'   => 'nullable|string',
             'prioritas' => 'sometimes|in:low,medium,high,urgent',
+            'lampiran'  => 'sometimes|nullable|file|mimes:jpg,jpeg,png,pdf,doc,docx|max:5120',
         ]);
+
+        if ($request->hasFile('lampiran')) {
+            $this->handleLampiranUpload($request, $ticket, $validated);
+        }
 
         if (isset($validated['status_id']) && in_array($validated['status_id'], [4, 5])) {
             $validated['terselesaikan_pada'] = now();

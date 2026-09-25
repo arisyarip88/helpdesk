@@ -2,7 +2,7 @@
 import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 
 const config = useRuntimeConfig()
-const apiBaseUrl = config.public.apiBaseUrl || 'http://localhost:8000/api'
+
 
 // --- Modul Color Mode Nuxt ---
 const colorMode = useColorMode()
@@ -141,7 +141,7 @@ const sendMessage = async (textToSend = null, customValue = null) => {
   isBotTyping.value = true
 
   try {
-    const res = await $fetch(`${apiBaseUrl}/chatbot/ask`, {
+    const res = await $fetch(`${config.public.apiBase}/chatbot/ask`, {
       method: 'POST',
       body: { 
         message: customValue || query 
@@ -339,7 +339,7 @@ onMounted(() => {
       <div 
         v-if="isChatbotOpen" 
         ref="chatbotContainerRef"
-        class="fixed bottom-24 right-6 z-50 w-full sm:w-[440px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col h-[520px] overflow-hidden"
+        class="fixed bottom-20 left-2 right-2 z-50 w-auto sm:bottom-24 sm:left-auto sm:right-6 sm:w-[440px] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col h-[min(460px,calc(100vh-6rem))] sm:h-[520px] overflow-hidden"
       >
         <!-- Header Modal Chat -->
         <div class="p-4 bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 text-white flex items-center justify-between">

@@ -218,6 +218,7 @@ const isEditing = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const fileInputRef = ref(null)
+const imagePreviewUrl = ref('')
 
 const form = ref({
   id: null,
@@ -235,8 +236,19 @@ const handleFileChange = (e) => {
   const file = e.target.files[0]
   if (file) {
     form.value.lampiran = file
+    imagePreviewUrl.value = ''
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader()
+      reader.onload = () => { imagePreviewUrl.value = String(reader.result || '') }
+      reader.readAsDataURL(file)
+    }
   }
 }
+
+const isImageAttachment = (path) => /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(String(path || ''))
+const attachmentUrl = (path) => /^https?:\/\//i.test(String(path || ''))
+  ? path
+  : `${storageBase}/${String(path || '').replace(/^\/+/, '')}`
 
 const openCreateModal = () => {
   isEditing.value = false
@@ -252,6 +264,7 @@ const openCreateModal = () => {
     lampiran: null,
     existing_lampiran: null
   }
+  imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
 }
@@ -270,6 +283,7 @@ const openEditModal = (item) => {
     lampiran: null,
     existing_lampiran: item.lampiran || null
   }
+  imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
 }
@@ -1058,8 +1072,14 @@ onUnmounted(() => {
               class="w-full text-xs text-slate-500 file:mr-3 file:py-2 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-medium file:bg-indigo-50 file:text-indigo-600 hover:file:bg-indigo-100 border border-slate-200 rounded-xl cursor-pointer focus:outline-none"
             />
             <p v-if="form.existing_lampiran" class="text-[11px] text-slate-400 mt-1">
-              File saat ini: <a :href="`${storageBase}/${form.existing_lampiran}`" target="_blank" class="text-indigo-600 underline">Lihat Lampiran</a>
+              File saat ini: <a :href="attachmentUrl(form.existing_lampiran)" target="_blank" class="text-indigo-600 underline">Lihat Lampiran</a>
             </p>
+            <img
+              v-if="imagePreviewUrl || (!form.lampiran && form.existing_lampiran && isImageAttachment(form.existing_lampiran))"
+              :src="imagePreviewUrl || attachmentUrl(form.existing_lampiran)"
+              alt="Preview lampiran"
+              class="mt-2 h-28 w-full rounded-xl border border-slate-200 object-contain bg-slate-50 p-1"
+            />
           </div>
 
           <div class="flex justify-end gap-2 pt-3 border-t border-slate-100">

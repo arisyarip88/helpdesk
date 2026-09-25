@@ -115,21 +115,21 @@ class AuthController extends Controller
         $username = $request->username;
         $password = $request->password;
 
-        // Step 1: Cek API 1
-        $key1=env('B2B_API_KEY_HRMS');
-        $api1Data = $this->checkExternalApi(env('B2B_HRMS_URL'),$key1,$username, $password);
-        if ($api1Data) {
-            $user = $this->syncUser($username, $password, $api1Data, 'API_1');
-            return $this->respondWithToken($user, 'Login berhasil via API 1');
-        }
+        // // Step 1: Cek API 1
+        // $key1=env('B2B_API_KEY_HRMS');
+        // $api1Data = $this->checkExternalApi(env('B2B_HRMS_URL'),$key1,$username, $password);
+        // if ($api1Data) {
+        //     $user = $this->syncUser($username, $password, $api1Data, 'API_1');
+        //     return $this->respondWithToken($user, 'Login berhasil via API 1');
+        // }
 
-        // Step 2: Cek API 2 (Ubah URL/endpoint sesuai API 2 milikmu)
-        $key2=env('B2B_API_KEY_MHS');
-        $api2Data = $this->checkExternalApi(env('B2B_MHS_URL'),$key2, $username, $password);
-        if ($api2Data) {
-            $user = $this->syncUser($username, $password, $api2Data, 'API_2');
-            return $this->respondWithToken($user, 'Login berhasil via API 2');
-        }
+        // // Step 2: Cek API 2 (Ubah URL/endpoint sesuai API 2 milikmu)
+        // $key2=env('B2B_API_KEY_MHS');
+        // $api2Data = $this->checkExternalApi(env('B2B_MHS_URL'),$key2, $username, $password);
+        // if ($api2Data) {
+        //     $user = $this->syncUser($username, $password, $api2Data, 'API_2');
+        //     return $this->respondWithToken($user, 'Login berhasil via API 2');
+        // }
 
         // Step 3: Cek Database Lokal jika API 1 & API 2 gagal
         $user = User::where('username', $username)->first();

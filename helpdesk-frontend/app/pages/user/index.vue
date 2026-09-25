@@ -159,6 +159,7 @@ const isEditing = ref(false)
 const submitting = ref(false)
 const formError = ref('')
 const fileInputRef = ref(null)
+const imagePreviewUrl = ref('')
 
 const form = ref({
   id: null,
@@ -174,10 +175,40 @@ const form = ref({
 
 const handleFileChange = (e) => {
   const file = e.target.files[0]
-  if (file) {
-    form.value.lampiran = file
+  formError.value = ''
+
+  if (!file) {
+    form.value.lampiran = null
+    return
+  }
+
+  if (!file.type.startsWith('image/') && !['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'].includes(file.type)) {
+    form.value.lampiran = null
+    e.target.value = ''
+    formError.value = 'Format file harus berupa gambar, PDF, atau DOC.'
+    return
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    form.value.lampiran = null
+    e.target.value = ''
+    formError.value = 'Ukuran file maksimal 5 MB.'
+    return
+  }
+
+  form.value.lampiran = file
+  imagePreviewUrl.value = ''
+  if (file.type.startsWith('image/')) {
+    const reader = new FileReader()
+    reader.onload = () => { imagePreviewUrl.value = String(reader.result || '') }
+    reader.readAsDataURL(file)
   }
 }
+
+const isImageAttachment = (path) => /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(String(path || ''))
+const attachmentUrl = (path) => /^https?:\/\//i.test(String(path || ''))
+  ? path
+  : `${storageBase}/${String(path || '').replace(/^\/+/, '')}`
 
 const openCreateModal = () => {
   isEditing.value = false
@@ -193,6 +224,7 @@ const openCreateModal = () => {
     lampiran: null,
     existing_lampiran: null
   }
+  imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
 }
@@ -211,6 +243,7 @@ const openEditModal = (item) => {
     lampiran: null,
     existing_lampiran: item.lampiran || null
   }
+  imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
 }
@@ -781,14 +814,21 @@ const toggleStatusFilter = (statusId) => {
                 <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
                 </svg>
-                <a 
-                  v-if="item.lampiran" 
-                  :href="`${storageBase}/${item.lampiran}`" 
-                  target="_blank" 
-                  class="text-indigo-600 hover:text-indigo-800 hover:underline font-semibold transition"
-                >
-                  Lihat Lampiran
-                </a>
+                <template v-if="item.lampiran">
+                  <img
+                    v-if="isImageAttachment(item.lampiran)"
+                    :src="attachmentUrl(item.lampiran)"
+                    alt="Preview lampiran"
+                    class="h-10 w-10 rounded-lg border border-slate-200 object-cover"
+                  />
+                  <a
+                    :href="attachmentUrl(item.lampiran)"
+                    target="_blank"
+                    class="text-indigo-600 hover:text-indigo-800 hover:underline font-semibold transition"
+                  >
+                    Lihat Lampiran
+                  </a>
+                </template>
                 <span v-else class="text-slate-400">Tanpa lampiran</span>
               </div>
             </div>
@@ -1062,18 +1102,16 @@ const toggleStatusFilter = (statusId) => {
                   <p class="text-[10px] text-slate-400">PNG, JPG, PDF, DOC (Maks. 5MB)</p>
                 </div>
               </div>
+              <p v-if="form.lampiran" class="mt-2 truncate text-[11px] font-medium text-indigo-600">
+                {{ form.lampiran.name }}
+              </p>
             </div>
-
-            <!-- Lampiran Eksisting saat Edit -->
-            <div v-if="form.existing_lampiran" class="mt-2 text-xs flex items-center gap-1.5 text-slate-500 bg-slate-100 p-2 rounded-xl border border-slate-200">
-              <svg class="w-3.5 h-3.5 text-indigo-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-              </svg>
-              <span class="truncate">File:</span>
-              <a :href="`${storageBase}/${form.existing_lampiran}`" target="_blank" class="text-indigo-600 hover:underline font-bold truncate">
-                Lihat Lampiran
-              </a>
-            </div>
+            <img
+              v-if="imagePreviewUrl || (!form.lampiran && form.existing_lampiran && isImageAttachment(form.existing_lampiran))"
+              :src="imagePreviewUrl || attachmentUrl(form.existing_lampiran)"
+              alt="Preview lampiran"
+              class="mt-2 h-28 w-full rounded-xl border border-slate-200 object-contain bg-slate-50 p-1"
+            />
           </div>
         </div>
 

@@ -11,10 +11,15 @@ export default defineNuxtConfig({
       tailwindcss(),
     ],
   },
+  // Konfigurasi devServer agar bisa diakses dari luar/NAT
+  devServer: {
+    host: '0.0.0.0',
+    port: 3000
+  },
 
   runtimeConfig: {
     public: {
-      apiBase: 'http://localhost:8000/api' // Sesuai dengan URL Laravel kamu
+      apiBase:process.env.NUXT_PUBLIC_API_BASE || 'https://apihelpdesk.s-net.my.id'
     }
   },
 
