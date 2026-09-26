@@ -11,7 +11,7 @@ return [
 'allowed_methods' => ['*'],
 
 'allowed_origins' => [
-    'https://helpdesk.s-net.my.id',
+    'https://xhelpdesk.s-net.my.id',
 ],
 
 
