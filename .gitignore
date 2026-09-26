@@ -1,0 +1,42 @@
+### --- HELPDEK BACKEND (LARAVEL) --- ###
+/helpdesk-backend/node_modules/
+/helpdesk-backend/public/hot/
+/helpdesk-backend/public/storage/
+/helpdesk-backend/storage/*.key
+/helpdesk-backend/vendor/
+/helpdesk-backend/.env
+/helpdesk-backend/.env.backup
+/helpdesk-backend/.env.production
+/helpdesk-backend/chatter.log
+/helpdesk-backend/npm-debug.log
+/helpdesk-backend/yarn-error.log
+/helpdesk-backend/.phpunit.result.cache
+/helpdesk-backend/homestead.json
+/helpdesk-backend/Homestead.yaml
+/helpdesk-backend/auth.json
+
+### --- HELPDESK FRONTEND (NUXT 4) --- ###
+/helpdesk-frontend/.nuxt/
+/helpdesk-frontend/.output/
+/helpdesk-frontend/node_modules/
+/helpdesk-frontend/dist/
+/helpdesk-frontend/npm-debug.log*
+/helpdesk-frontend/yarn-debug.log*
+/helpdesk-frontend/yarn-error.log*
+/helpdesk-frontend/.pnpm-debug.log*
+/helpdesk-frontend/.env
+/helpdesk-frontend/.env.local
+/helpdesk-frontend/.env.development.local
+/helpdesk-frontend/.env.test.local
+/helpdesk-frontend/.env.production.local
+
+### --- GLOBAL / EDITOR SYSTEM --- ###
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
