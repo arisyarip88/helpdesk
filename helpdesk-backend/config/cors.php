@@ -12,6 +12,7 @@ return [
 
 'allowed_origins' => [
     'https://xhelpdesk.s-net.my.id',
+    'http://localhost:3000',
 ],
 
 
