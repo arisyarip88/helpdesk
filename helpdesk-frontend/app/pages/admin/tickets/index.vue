@@ -542,8 +542,8 @@ onUnmounted(() => {
     <!-- Header -->
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-slate-800">Tiket Aduan id : {{ user?.department_id }}</h1>
-        <p class="text-sm text-slate-500">Kelola dan pantau seluruh laporan aduan dari pengguna. {{ user?.id}}</p>
+        <h1 class="text-2xl font-bold text-slate-800">Tiket Aduan</h1>
+        <p class="text-sm text-slate-500">Kelola dan pantau seluruh laporan aduan dari pengguna.</p>
       </div>
       <button v-if="hasRole(['4','1'])"
         @click="openCreateModal"
