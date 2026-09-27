@@ -1,8 +1,19 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 const route = useRoute()
 const isSidebarOpen = ref(false) // Default tertutup pada layar mobile
+const isKnowledgeMenuOpen = ref(route.path.startsWith('/admin/knowledge-base'))
+const isTicketNotificationOpen = ref(false)
+const ticketNotificationStats = ref({ open: 0, complete: 0, rejected: 0 })
+const unreadTicketNotifications = ref({ open: 0, complete: 0, rejected: 0 })
+const departmentStatusNotifications = ref([])
+const previousDepartmentTicketStatuses = ref(null)
+const isFetchingDepartmentStatuses = ref(false)
+const hasLoadedTicketNotificationStats = ref(false)
+const ticketNotificationRef = ref(null)
+const apiBase = useRuntimeConfig().public.apiBase || 'http://localhost:8000/api'
+const router = useRouter()
 
 const toggleSidebar = () => {
   isSidebarOpen.value = !isSidebarOpen.value
@@ -12,24 +23,133 @@ const toggleSidebar = () => {
 const isDropdownOpen = ref(false)
 const dropdownRef = ref(null)
 
-const { user, fetchUser, logout, hasRole } = useAuth()
+const { token, user, fetchUser, logout, hasRole } = useAuth()
+const unreadTicketNotificationTotal = computed(() =>
+  unreadTicketNotifications.value.open +
+  unreadTicketNotifications.value.complete +
+  unreadTicketNotifications.value.rejected
+)
+
+const fetchTicketNotificationStats = async () => {
+  const roleId = Number(user.value?.role_id)
+  if (![1, 2, 3].includes(roleId) || !token.value) return
+
+  if (roleId === 3) {
+    if (isFetchingDepartmentStatuses.value) return
+    isFetchingDepartmentStatuses.value = true
+    try {
+      const response = await $fetch(`${apiBase}/tickets`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token.value}`
+        },
+        params: { per_page: 100 }
+      })
+      const tickets = response.data?.data?.data || response.data?.data || []
+      const currentStatuses = new Map(tickets.map(ticket => [Number(ticket.id), {
+        statusId: Number(ticket.status_id),
+        statusName: ticket.status?.name || 'Status berubah',
+        ticketNumber: ticket.nomor_tiket,
+        title: ticket.judul
+      }]))
+
+      if (previousDepartmentTicketStatuses.value) {
+        const changes = []
+        for (const [ticketId, current] of currentStatuses) {
+          const previous = previousDepartmentTicketStatuses.value.get(ticketId)
+          if (!previous || previous.statusId !== current.statusId) {
+            changes.push({
+              id: `${ticketId}-${current.statusId}-${Date.now()}`,
+              ticketNumber: current.ticketNumber,
+              title: current.title,
+              previousStatusName: previous?.statusName || 'Baru',
+              statusName: current.statusName,
+              statusId: current.statusId
+            })
+          }
+        }
+        if (changes.length) {
+          departmentStatusNotifications.value = [...changes.reverse(), ...departmentStatusNotifications.value].slice(0, 20)
+        }
+      }
+
+      previousDepartmentTicketStatuses.value = currentStatuses
+    } catch (error) {
+      console.error('Gagal memeriksa perubahan status departemen:', error)
+    } finally {
+      isFetchingDepartmentStatuses.value = false
+    }
+    return
+  }
+
+  try {
+    const response = await $fetch(`${apiBase}/tickets/stats`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token.value}`
+      }
+    })
+    const nextStats = response.data || response
+    const statusKeys = ['open', 'complete', 'rejected']
+
+    if (!hasLoadedTicketNotificationStats.value) {
+      unreadTicketNotifications.value = Object.fromEntries(statusKeys.map(key => [key, Number(nextStats[key]) || 0]))
+      hasLoadedTicketNotificationStats.value = true
+    } else {
+      for (const key of statusKeys) {
+        const increase = (Number(nextStats[key]) || 0) - (Number(ticketNotificationStats.value[key]) || 0)
+        if (increase > 0) unreadTicketNotifications.value[key] += increase
+      }
+    }
+
+    ticketNotificationStats.value = nextStats
+  } catch (error) {
+    console.error('Gagal memuat notifikasi tiket:', error)
+  }
+}
+
+const openTicketsByStatus = (statusKey, statusId, search = '') => {
+  if (statusKey) unreadTicketNotifications.value[statusKey] = 0
+  isTicketNotificationOpen.value = false
+  router.push({ path: '/admin/tickets', query: { status_id: statusId, search: search || undefined } })
+}
+
+const openDepartmentStatusNotification = (notification) => {
+  departmentStatusNotifications.value = departmentStatusNotifications.value.filter(item => item.id !== notification.id)
+  openTicketsByStatus(null, notification.statusId, notification.ticketNumber)
+}
+
+let ticketNotificationInterval = null
 
 // Menutup dropdown jika klik dilakukan di luar area menu
 const handleClickOutside = (event) => {
   if (dropdownRef.value && !dropdownRef.value.contains(event.target)) {
     isDropdownOpen.value = false
   }
+  if (ticketNotificationRef.value && !ticketNotificationRef.value.contains(event.target)) {
+    isTicketNotificationOpen.value = false
+  }
 }
 
 // Otomatis menutup sidebar di mobile saat pengguna berpindah halaman
 watch(() => route.path, () => {
+  isTicketNotificationOpen.value = false
+  if (route.path.startsWith('/admin/knowledge-base')) {
+    isKnowledgeMenuOpen.value = true
+  }
   if (process.client && window.innerWidth < 768) {
     isSidebarOpen.value = false
   }
 })
 
+watch(() => [user.value?.id, token.value], ([userId, currentToken]) => {
+  if (userId && currentToken) fetchTicketNotificationStats()
+}, { immediate: true })
+
 onMounted(() => {
   fetchUser()
+  fetchTicketNotificationStats()
+  ticketNotificationInterval = setInterval(fetchTicketNotificationStats, 30000)
   document.addEventListener('click', handleClickOutside)
   
   // Buka sidebar secara default khusus tampilan Desktop
@@ -39,15 +159,16 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (ticketNotificationInterval) clearInterval(ticketNotificationInterval)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-100 flex flex-col font-sans">
+  <div class="admin-layout-shell min-h-screen bg-gray-100 flex flex-col font-sans">
     
     <!-- Header Navbar -->
-    <header class="bg-white border-b border-gray-200 h-16 flex items-center justify-between px-4 fixed top-0 left-0 right-0 z-40">
+    <header class="admin-print-hide bg-white border-b border-gray-200 h-16 flex items-center justify-between px-4 fixed top-0 left-0 right-0 z-40">
       <div class="flex items-center space-x-3">
         <!-- Tombol Hamburger / Toggle Sidebar -->
         <button 
@@ -68,6 +189,65 @@ onUnmounted(() => {
       </div>
 
       <!-- Area Pengguna & Dropdown Submenu -->
+      <div class="flex items-center gap-2">
+      <div v-if="hasRole(['1','2','3'])" ref="ticketNotificationRef" class="relative">
+        <button
+          type="button"
+          @click="isTicketNotificationOpen = !isTicketNotificationOpen; isDropdownOpen = false"
+          :aria-expanded="isTicketNotificationOpen"
+          aria-label="Notifikasi tiket"
+          title="Notifikasi tiket"
+          class="relative rounded-lg p-2 text-gray-600 transition hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 0 1-6 0v-1m6 0H9" />
+          </svg>
+          <span v-if="(hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) > 0" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+            {{ (hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) > 99 ? '99+' : (hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) }}
+          </span>
+        </button>
+
+        <Transition enter-active-class="transition ease-out duration-100" enter-from-class="transform opacity-0 scale-95" enter-to-class="transform opacity-100 scale-100" leave-active-class="transition ease-in duration-75" leave-from-class="transform opacity-100 scale-100" leave-to-class="transform opacity-0 scale-95">
+          <div v-if="isTicketNotificationOpen" class="absolute right-0 z-50 mt-2 w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div class="border-b border-gray-100 px-4 py-3">
+              <p class="text-sm font-bold text-gray-800">Notifikasi Tiket</p>
+              <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Perubahan status tiket departemen Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
+            </div>
+            <div v-if="hasRole(['3'])" class="max-h-80 overflow-y-auto p-2">
+              <button
+                v-for="notification in departmentStatusNotifications"
+                :key="notification.id"
+                @click="openDepartmentStatusNotification(notification)"
+                class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50"
+              >
+                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.statusId === 4 ? 'bg-emerald-500' : notification.statusId === 5 ? 'bg-rose-500' : 'bg-indigo-500'"></span>
+                <span class="min-w-0 flex-1">
+                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticketNumber }} · {{ notification.statusName }}</span>
+                  <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
+                  <span class="mt-0.5 block text-[10px] text-gray-400">{{ notification.previousStatusName }} → {{ notification.statusName }}</span>
+                </span>
+              </button>
+              <p v-if="departmentStatusNotifications.length === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada perubahan status baru.</p>
+            </div>
+            <div v-else class="p-2">
+              <button v-if="unreadTicketNotifications.open > 0" @click="openTicketsByStatus('open', 1)" class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50">
+                <span class="flex items-center gap-2.5 text-sm font-medium text-gray-700"><span class="h-2 w-2 rounded-full bg-indigo-500"></span>Baru Masuk</span>
+                <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700">{{ unreadTicketNotifications.open }}</span>
+              </button>
+              <button v-if="unreadTicketNotifications.complete > 0" @click="openTicketsByStatus('complete', 4)" class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-emerald-50">
+                <span class="flex items-center gap-2.5 text-sm font-medium text-gray-700"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Close</span>
+                <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-bold text-emerald-700">{{ unreadTicketNotifications.complete }}</span>
+              </button>
+              <button v-if="unreadTicketNotifications.rejected > 0" @click="openTicketsByStatus('rejected', 5)" class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-rose-50">
+                <span class="flex items-center gap-2.5 text-sm font-medium text-gray-700"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Reject</span>
+                <span class="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">{{ unreadTicketNotifications.rejected }}</span>
+              </button>
+              <p v-if="unreadTicketNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada notifikasi baru.</p>
+            </div>
+          </div>
+        </Transition>
+      </div>
+
       <div class="relative" ref="dropdownRef">
         <button 
           @click="isDropdownOpen = !isDropdownOpen"
@@ -141,21 +321,23 @@ onUnmounted(() => {
           </div>
         </Transition>
       </div>
+      </div>
     </header>
 
     <!-- Overlay Latar Belakang Gelap (Mobile Backdrop) -->
     <div 
       v-if="isSidebarOpen" 
       @click="isSidebarOpen = false"
-      class="fixed inset-0 bg-black/50 z-20 md:hidden transition-opacity"
+      class="admin-print-hide fixed inset-0 bg-black/50 z-20 md:hidden transition-opacity"
       aria-hidden="true"
     ></div>
 
     <!-- Content & Sidebar Wrapper -->
-    <div class="flex pt-16 min-h-screen">
+    <div class="admin-layout-content flex pt-16 min-h-screen">
       
       <!-- Sidebar Navigation -->
       <aside 
+        class="admin-print-hide"
         :class="[
           'bg-gray-900 text-gray-300 transition-all duration-300 ease-in-out fixed top-16 bottom-0 left-0 z-30 overflow-y-auto',
           'md:static md:z-auto',
@@ -212,16 +394,33 @@ onUnmounted(() => {
           </NuxtLink>
 
           <!-- 5. Knowledge Base -->
-          <NuxtLink v-if="hasRole(['1','2'])"
-            to="/admin/knowledge-base" 
-            class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
-            active-class="bg-blue-600 text-white hover:bg-blue-600"
-          >
-            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
-            </svg>
-            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Knowledge Base</span>
-          </NuxtLink>
+          <div v-if="hasRole(['1','2'])">
+            <button
+              type="button"
+              @click="isKnowledgeMenuOpen = !isKnowledgeMenuOpen"
+              :aria-expanded="isKnowledgeMenuOpen"
+              class="w-full flex items-center justify-between px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
+              :class="route.path.startsWith('/admin/knowledge-base') ? 'bg-blue-600 text-white hover:bg-blue-600' : ''"
+            >
+              <span class="flex items-center space-x-3">
+                <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
+                </svg>
+                <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Knowledge Base</span>
+              </span>
+              <svg v-if="isSidebarOpen" class="h-4 w-4 transition-transform" :class="isKnowledgeMenuOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19 9-7 7-7-7" />
+              </svg>
+            </button>
+            <div v-if="isKnowledgeMenuOpen && isSidebarOpen" class="ml-5 mt-1 space-y-1 border-l border-slate-700 pl-3">
+              <NuxtLink to="/admin/knowledge-base" class="block rounded-lg px-3 py-2 text-xs font-medium text-slate-300 hover:bg-gray-800 hover:text-white" exact-active-class="bg-gray-800 text-white">
+                Daftar Knowledge
+              </NuxtLink>
+              <NuxtLink to="/admin/knowledge-base/unanswered" class="block rounded-lg px-3 py-2 text-xs font-medium text-slate-300 hover:bg-gray-800 hover:text-white" active-class="bg-gray-800 text-white">
+                Belum Terjawab
+              </NuxtLink>
+            </div>
+          </div>
 
           <!-- 6. Laporan -->
           <NuxtLink v-if="hasRole(['1','2','3'])"
@@ -251,7 +450,7 @@ onUnmounted(() => {
       </aside>
 
       <!-- Main Content Area -->
-      <main class="flex-1 p-4 sm:p-6 overflow-y-auto w-full">
+      <main class="admin-print-main flex-1 p-4 sm:p-6 overflow-y-auto w-full">
         <slot />
       </main>
 

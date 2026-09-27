@@ -12,12 +12,77 @@ const toggleSidebar = () => {
 const isDropdownOpen = ref(false)
 const isProfileModalOpen = ref(false)
 const dropdownRef = ref(null)
+const ticketNotificationRef = ref(null)
+const isTicketNotificationsOpen = ref(false)
+const ticketStatusNotifications = ref([])
+const previousTicketStatuses = ref(null)
+const isFetchingTicketStatuses = ref(false)
+const apiBase = useRuntimeConfig().public.apiBase || 'http://localhost:8000/api'
+const router = useRouter()
 
-const { user, fetchUser, logout } = useAuth()
+const { token, user, fetchUser, logout } = useAuth()
+
+const fetchTicketStatusChanges = async () => {
+  if (Number(user.value?.role_id) !== 4 || !token.value || isFetchingTicketStatuses.value) return
+
+  isFetchingTicketStatuses.value = true
+  try {
+    const response = await $fetch(`${apiBase}/tickets`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token.value}`
+      },
+      params: { per_page: 100 }
+    })
+    const tickets = response.data?.data || []
+    const currentStatuses = new Map(tickets.map(ticket => [Number(ticket.id), {
+      statusId: Number(ticket.status_id),
+      statusName: ticket.status?.name || 'Status berubah',
+      ticketNumber: ticket.nomor_tiket,
+      title: ticket.judul
+    }]))
+
+    if (previousTicketStatuses.value) {
+      const changes = []
+      for (const [ticketId, current] of currentStatuses) {
+        const previous = previousTicketStatuses.value.get(ticketId)
+        if (previous && previous.statusId !== current.statusId) {
+          changes.push({
+            id: `${ticketId}-${current.statusId}-${Date.now()}`,
+            ticketId,
+            statusId: current.statusId,
+            statusName: current.statusName,
+            ticketNumber: current.ticketNumber,
+            title: current.title,
+            changedAt: new Date().toISOString()
+          })
+        }
+      }
+      if (changes.length) {
+        ticketStatusNotifications.value = [...changes.reverse(), ...ticketStatusNotifications.value].slice(0, 20)
+      }
+    }
+
+    previousTicketStatuses.value = currentStatuses
+  } catch (error) {
+    console.error('Gagal memeriksa perubahan status tiket:', error)
+  } finally {
+    isFetchingTicketStatuses.value = false
+  }
+}
+
+const openStatusNotification = (notification) => {
+  ticketStatusNotifications.value = ticketStatusNotifications.value.filter(item => item.id !== notification.id)
+  isTicketNotificationsOpen.value = false
+  router.push({ path: '/user', query: { status_id: notification.statusId } })
+}
 
 const handleClickOutside = (event) => {
   if (dropdownRef.value && !dropdownRef.value.contains(event.target)) {
     isDropdownOpen.value = false
+  }
+  if (ticketNotificationRef.value && !ticketNotificationRef.value.contains(event.target)) {
+    isTicketNotificationsOpen.value = false
   }
 }
 
@@ -28,13 +93,22 @@ const openProfileModal = () => {
 }
 
 watch(() => route.path, () => {
+  isTicketNotificationsOpen.value = false
   if (process.client && window.innerWidth < 768) {
     isSidebarOpen.value = false
   }
 })
 
+watch(() => [user.value?.id, token.value], ([userId, authToken]) => {
+  if (userId && authToken) fetchTicketStatusChanges()
+}, { immediate: true })
+
+let ticketStatusPollInterval = null
+
 onMounted(() => {
   fetchUser()
+  fetchTicketStatusChanges()
+  ticketStatusPollInterval = setInterval(fetchTicketStatusChanges, 15000)
   document.addEventListener('click', handleClickOutside)
   
   if (window.innerWidth >= 768) {
@@ -43,6 +117,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  if (ticketStatusPollInterval) clearInterval(ticketStatusPollInterval)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
@@ -71,12 +146,56 @@ onUnmounted(() => {
         </div>
         </div>
 
-        <!-- Area Akun User & Dropdown -->
-        <div class="relative" ref="dropdownRef">
-          <button 
-            @click="isDropdownOpen = !isDropdownOpen"
+        <!-- Notifikasi status tiket dan akun user -->
+        <div class="flex h-full shrink-0 items-center gap-2">
+        <div ref="ticketNotificationRef" class="relative flex h-10 shrink-0 items-center">
+          <button
             type="button"
-            class="flex items-center space-x-2 sm:space-x-3 p-1.5 rounded-xl hover:bg-slate-100 transition focus:outline-none"
+            @click="isTicketNotificationsOpen = !isTicketNotificationsOpen; isDropdownOpen = false"
+            :aria-expanded="isTicketNotificationsOpen"
+            aria-label="Notifikasi perubahan status tiket"
+            title="Notifikasi perubahan status tiket"
+            class="relative flex h-10 w-10 items-center justify-center rounded-xl p-2 text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 0 1-6 0v-1m6 0H9" />
+            </svg>
+            <span v-if="ticketStatusNotifications.length" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+              {{ ticketStatusNotifications.length > 99 ? '99+' : ticketStatusNotifications.length }}
+            </span>
+          </button>
+
+          <Transition enter-active-class="transition ease-out duration-100" enter-from-class="transform opacity-0 scale-95" enter-to-class="transform opacity-100 scale-100" leave-active-class="transition ease-in duration-75" leave-from-class="transform opacity-100 scale-100" leave-to-class="transform opacity-0 scale-95">
+            <div v-if="isTicketNotificationsOpen" class="absolute right-0 top-full z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+              <div class="border-b border-slate-100 px-4 py-3">
+                <p class="text-sm font-bold text-slate-800">Perubahan Status Tiket</p>
+                <p class="mt-0.5 text-[11px] text-slate-500">Klik notifikasi untuk melihat tiket.</p>
+              </div>
+              <div v-if="ticketStatusNotifications.length" class="max-h-80 overflow-y-auto p-2">
+                <button
+                  v-for="notification in ticketStatusNotifications"
+                  :key="notification.id"
+                  @click="openStatusNotification(notification)"
+                  class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50"
+                >
+                  <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.statusId === 4 ? 'bg-emerald-500' : notification.statusId === 5 ? 'bg-rose-500' : 'bg-indigo-500'"></span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-xs font-semibold text-slate-800">{{ notification.ticketNumber }} · {{ notification.statusName }}</span>
+                    <span class="mt-0.5 block truncate text-[11px] text-slate-500">{{ notification.title }}</span>
+                  </span>
+                  <span class="shrink-0 text-[10px] text-slate-400">{{ new Date(notification.changedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) }}</span>
+                </button>
+              </div>
+              <p v-else class="px-4 py-8 text-center text-xs text-slate-500">Belum ada perubahan status baru.</p>
+            </div>
+          </Transition>
+        </div>
+
+        <div class="relative flex h-10 shrink-0 items-center" ref="dropdownRef">
+          <button 
+            @click="isDropdownOpen = !isDropdownOpen; isTicketNotificationsOpen = false"
+            type="button"
+            class="flex h-10 items-center space-x-2 rounded-xl p-1 sm:space-x-3 hover:bg-slate-100 transition focus:outline-none"
           >
             <div class="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-indigo-600 flex items-center justify-center text-white font-semibold text-xs sm:text-sm shadow-sm">
               {{ user?.name ? user.name.charAt(0).toUpperCase() : 'U' }}
@@ -140,6 +259,7 @@ onUnmounted(() => {
               </div>
             </div>
           </Transition>
+        </div>
         </div>
       </div>
     </header>

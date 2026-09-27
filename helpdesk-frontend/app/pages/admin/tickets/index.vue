@@ -29,6 +29,12 @@ const currentPage = ref(Number(route.query.page) || 1)
 const perPage = ref(Number(route.query.per_page) || 10)
 const searchQuery = ref(String(route.query.search || ''))
 const selectedStatusFilter = ref(String(route.query.status_id || ''))
+const selectedDepartmentFilter = ref(String(route.query.department_id || ''))
+const selectedPriorityFilter = ref(String(route.query.prioritas || ''))
+const canFilterDepartment = computed(() => [1, 2].includes(userRoleId.value))
+const showPriorityStatus = computed(() => [1, 2, 3].includes(userRoleId.value))
+const canDeleteChat = computed(() => ![3, 4].includes(userRoleId.value))
+const canDeleteTicket = computed(() => userRoleId.value !== 3)
 
 // Sinkronisasi State jika Query URL berubah
 watch(
@@ -38,6 +44,8 @@ watch(
     perPage.value = Number(newQuery.per_page) || 10
     searchQuery.value = String(newQuery.search || '')
     selectedStatusFilter.value = String(newQuery.status_id || '')
+    selectedDepartmentFilter.value = String(newQuery.department_id || '')
+    selectedPriorityFilter.value = String(newQuery.prioritas || '')
   }
 )
 
@@ -57,7 +65,9 @@ const updateQueryParams = () => {
       page: currentPage.value,
       per_page: perPage.value,
       search: searchQuery.value || undefined,
-      status_id: selectedStatusFilter.value || undefined
+      status_id: selectedStatusFilter.value || undefined,
+      department_id: canFilterDepartment.value ? selectedDepartmentFilter.value || undefined : undefined,
+      prioritas: showPriorityStatus.value ? selectedPriorityFilter.value || undefined : undefined
     }
   })
 }
@@ -72,22 +82,23 @@ const { data: responseData, pending, error, refresh } = await useAsyncData(
       per_page: perPage.value,
       search: searchQuery.value,
       status_id: selectedStatusFilter.value,
-      department_id: department_id.value,
+      department_id: canFilterDepartment.value ? selectedDepartmentFilter.value : undefined,
+      prioritas: showPriorityStatus.value ? selectedPriorityFilter.value : undefined,
       role_id: userRoleId.value,
       user_id: userId.value
     }
   }),
   {
-    watch: [currentPage, perPage, searchQuery, selectedStatusFilter],
+    watch: [currentPage, perPage, searchQuery, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter],
     getCachedData: () => undefined
   }
 )
 
-watch([currentPage, perPage, selectedStatusFilter], () => {
+watch([currentPage, perPage, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter], () => {
   updateQueryParams()
 })
 
-watch(selectedStatusFilter, () => {
+watch([selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter], () => {
   if (currentPage.value !== 1) {
     currentPage.value = 1
   }
@@ -119,6 +130,33 @@ const pagination = computed(() => {
     to: meta.to || 0
   }
 })
+
+const formatDateTime = (value) => {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('id-ID', {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(date)
+}
+
+const formatResolutionDuration = (createdAt, completedAt) => {
+  if (!createdAt || !completedAt) return 'Belum selesai'
+
+  const durationMinutes = Math.floor((new Date(completedAt) - new Date(createdAt)) / 60000)
+  if (!Number.isFinite(durationMinutes) || durationMinutes < 0) return '-'
+
+  const days = Math.floor(durationMinutes / 1440)
+  const hours = Math.floor((durationMinutes % 1440) / 60)
+  const minutes = durationMinutes % 60
+  const parts = []
+
+  if (days) parts.push(`${days} hari`)
+  if (hours) parts.push(`${hours} jam`)
+  if (minutes || parts.length === 0) parts.push(`${minutes} menit`)
+  return parts.join(' ')
+}
 
 // Fetch Statistik Tiket langsung dari API
 const { data: statsResponse, refresh: refreshStats } = await useAsyncData(
@@ -345,6 +383,7 @@ const handleSubmit = async () => {
 
 // DELETE TIKET
 const handleDelete = async (id) => {
+  if (!canDeleteTicket.value) return
   if (confirm('Apakah Anda yakin ingin menghapus tiket aduan ini?')) {
     try {
       await $fetch(`${apiBase}/tickets/${id}`, {
@@ -359,7 +398,7 @@ const handleDelete = async (id) => {
 }
 
 // --- 5. FITUR CHAT REALTIME & NOTIFIKASI ---
-const isChatModalOpen = ref(false)
+const isDetailChatActive = ref(false)
 const selectedTicket = ref(null)
 const chatMessages = ref([])
 const loadingChat = ref(false)
@@ -367,6 +406,55 @@ const sendingMessage = ref(false)
 const deletingMessageId = ref(null)
 const deletingAll = ref(false)
 const newMessage = ref('')
+
+const isDetailModalOpen = ref(false)
+const detailTicket = ref(null)
+const detailStatus = ref('')
+const updatingStatus = ref(false)
+const detailStatusError = ref('')
+
+const openDetailModal = (ticket) => {
+  detailTicket.value = ticket
+  detailStatus.value = String(ticket.status_id || '')
+  detailStatusError.value = ''
+  isDetailModalOpen.value = true
+  openTicketChat(ticket)
+}
+
+const closeDetailModal = () => {
+  isDetailModalOpen.value = false
+  detailTicket.value = null
+  detailStatusError.value = ''
+  closeTicketChat()
+}
+
+const updateTicketStatus = async () => {
+  if (!detailTicket.value || !detailStatus.value) return
+
+  updatingStatus.value = true
+  detailStatusError.value = ''
+  try {
+    const response = await $fetch(`${apiBase}/tickets/${detailTicket.value.id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: { status_id: Number(detailStatus.value) }
+    })
+    if (response.data) {
+      detailTicket.value = response.data
+      detailStatus.value = String(response.data.status_id)
+    }
+    await Promise.all([refresh(), refreshStats()])
+    const updatedTicket = tickets.value.find(ticket => ticket.id === detailTicket.value.id)
+    if (updatedTicket) {
+      detailTicket.value = updatedTicket
+      detailStatus.value = String(updatedTicket.status_id)
+    }
+  } catch (err) {
+    detailStatusError.value = err.data?.message || 'Gagal mengubah status tiket.'
+  } finally {
+    updatingStatus.value = false
+  }
+}
 
 const unreadCounts = ref({})
 const lastMessageCounts = ref({})
@@ -392,9 +480,11 @@ const playNotificationSound = () => {
   }
 }
 
-const openChatModal = async (ticket) => {
+const openTicketChat = async (ticket) => {
+  if (chatInterval) clearInterval(chatInterval)
   selectedTicket.value = ticket
-  isChatModalOpen.value = true
+  isDetailChatActive.value = true
+  chatMessages.value = []
   
   unreadCounts.value[ticket.id] = 0
 
@@ -405,8 +495,8 @@ const openChatModal = async (ticket) => {
   }, 3000)
 }
 
-const closeChatModal = () => {
-  isChatModalOpen.value = false
+const closeTicketChat = () => {
+  isDetailChatActive.value = false
   selectedTicket.value = null
   chatMessages.value = []
   newMessage.value = ''
@@ -462,6 +552,7 @@ const sendMessage = async () => {
 }
 
 const deleteSingleMessage = async (messageId) => {
+  if (!canDeleteChat.value || !selectedTicket.value) return
   if (!confirm('Apakah Anda yakin ingin menghapus pesan ini?')) return
   
   deletingMessageId.value = messageId
@@ -482,6 +573,7 @@ const deleteSingleMessage = async (messageId) => {
 }
 
 const deleteAllMessages = async () => {
+  if (!canDeleteChat.value || !selectedTicket.value) return
   if (!confirm('Apakah Anda yakin ingin menghapus SELURUH pesan percakapan pada tiket ini?')) return
 
   deletingAll.value = true
@@ -501,7 +593,7 @@ const deleteAllMessages = async () => {
 }
 
 const checkGlobalUnreadMessages = async () => {
-  if (isChatModalOpen.value || !tickets.value.length) return
+  if (isDetailChatActive.value || !tickets.value.length) return
 
   for (const ticket of tickets.value) {
     try {
@@ -676,14 +768,39 @@ onUnmounted(() => {
         />
       </div>
 
-      <div class="flex items-center gap-2 text-xs text-slate-500 self-end md:self-auto">
-        <span>Tampilkan:</span>
-        <select v-model="perPage" class="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
-          <option :value="5">5</option>
-          <option :value="10">10</option>
-          <option :value="25">25</option>
-          <option :value="50">50</option>
+      <div class="flex w-full md:w-auto flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
+        <select
+          v-if="canFilterDepartment"
+          v-model="selectedDepartmentFilter"
+          aria-label="Filter departemen"
+          class="min-w-0 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Semua Departemen</option>
+          <option v-for="department in departmentsList" :key="department.kode || department.id" :value="department.kode || department.id">
+            {{ department.nama }}
+          </option>
         </select>
+        <select
+          v-if="showPriorityStatus"
+          v-model="selectedPriorityFilter"
+          aria-label="Filter prioritas"
+          class="min-w-0 border border-slate-200 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+        >
+          <option value="">Semua Prioritas</option>
+          <option value="low">Low</option>
+          <option value="medium">Medium</option>
+          <option value="high">High</option>
+          <option value="urgent">Urgent</option>
+        </select>
+        <div class="flex items-center gap-2 text-xs text-slate-500">
+          <span>Tampilkan:</span>
+          <select v-model="perPage" class="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
+            <option :value="5">5</option>
+            <option :value="10">10</option>
+            <option :value="25">25</option>
+            <option :value="50">50</option>
+          </select>
+        </div>
       </div>
     </div>
 
@@ -700,19 +817,19 @@ onUnmounted(() => {
                   class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
               </th>
-              <th class="px-6 py-4">No. Tiket</th>
-              <th class="px-6 py-4">Pelapor & Judul</th>
-              <th class="px-6 py-4">Departemen/Unit Kerja Tujuan</th>
-              <th class="px-6 py-4">Prioritas</th>
-              <th class="px-6 py-4">Status</th>
-              <th class="px-6 py-4">Lampiran</th>
+              <th class="px-6 py-4">ID Tiket</th>
+              <th class="px-6 py-4">Judul & Pelapor</th>
+              <th class="px-6 py-4">Waktu & Durasi Penyelesaian</th>
+              <th v-if="showPriorityStatus" class="px-6 py-4">Prioritas</th>
+              <th v-if="showPriorityStatus" class="px-6 py-4">Status</th>
+              <th class="px-6 py-4">Chat</th>
               <th class="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <!-- Loading -->
             <tr v-if="pending">
-              <td colspan="8" class="px-6 py-12 text-center text-slate-400">
+              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-slate-400">
                 <div class="flex items-center justify-center gap-2">
                   <svg class="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -725,7 +842,7 @@ onUnmounted(() => {
 
             <!-- Error -->
             <tr v-else-if="error">
-              <td colspan="8" class="px-6 py-12 text-center text-rose-500">
+              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-rose-500">
                 Gagal memuat data tiket aduan.
               </td>
             </tr>
@@ -735,14 +852,18 @@ onUnmounted(() => {
               v-else 
               v-for="item in tickets" 
               :key="item.id" 
+              @click="openDetailModal(item)"
+              @keydown.enter="openDetailModal(item)"
+              tabindex="0"
               :class="{'bg-indigo-50/30': selectedIds.includes(item.id)}"
-              class="hover:bg-slate-50/50 transition"
+              class="hover:bg-indigo-50 transition-colors cursor-pointer focus:outline-none focus:bg-indigo-50/70"
             >
               <td class="py-4 px-4 text-center">
                 <input 
                   type="checkbox" 
                   :value="item.id" 
                   v-model="selectedIds"
+                  @click.stop
                   class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
               </td>
@@ -751,56 +872,41 @@ onUnmounted(() => {
               </td>
               <td class="px-6 py-4">
                 <div class="font-medium text-slate-800">{{ item.judul }}</div>
-                <div class="text-xs text-slate-400">Oleh: {{ item.user?.name || '-' }}</div>
+                <div class="mt-1 text-xs text-slate-500">Pelapor: {{ item.user?.name || '-' }}</div>
               </td>
-              <td class="px-6 py-4 text-slate-600">
-                {{ item.department?.nama || '-' }}
+              <td class="px-6 py-4 whitespace-nowrap text-xs text-slate-600">
+                <div>Dibuat: {{ formatDateTime(item.created_at) }}</div>
+                <div class="mt-1">Selesai: {{ formatDateTime(item.terselesaikan_pada) }}</div>
+                <div class="mt-1 font-semibold text-slate-700">Durasi: {{ formatResolutionDuration(item.created_at, item.terselesaikan_pada) }}</div>
+                <div v-if="Number(item.status_id) === 4" class="mt-1 flex items-center gap-1.5" :aria-label="item.rating ? `Rating ${item.rating} dari 5` : 'Belum dinilai'">
+                  <span>Rating:</span>
+                  <template v-if="item.rating">
+                    <span aria-hidden="true" class="text-amber-500">★★★★★</span>
+                    <span class="font-semibold text-amber-700">{{ item.rating }}/5</span>
+                  </template>
+                  <span v-else class="text-slate-400">Belum dinilai</span>
+                </div>
+              </td>
+              <td v-if="showPriorityStatus" class="px-6 py-4">
+                <span class="px-2.5 py-1 text-xs font-semibold rounded-full uppercase" :class="{
+                  'bg-slate-100 text-slate-600': item.prioritas === 'low',
+                  'bg-blue-50 text-blue-600': item.prioritas === 'medium',
+                  'bg-amber-50 text-amber-600': item.prioritas === 'high',
+                  'bg-rose-50 text-rose-600': item.prioritas === 'urgent'
+                }">{{ item.prioritas || '-' }}</span>
+              </td>
+              <td v-if="showPriorityStatus" class="px-6 py-4">
+                <span class="px-2.5 py-1 text-xs font-semibold rounded-full capitalize" :class="{
+                  'bg-amber-100 text-amber-700': Number(item.status_id) === 1,
+                  'bg-blue-100 text-blue-700': Number(item.status_id) === 2,
+                  'bg-emerald-100 text-emerald-700': Number(item.status_id) === 3,
+                  'bg-slate-100 text-slate-600': Number(item.status_id) === 4,
+                  'bg-rose-100 text-rose-700': Number(item.status_id) === 5
+                }">{{ item.status?.name || '-' }}</span>
               </td>
               <td class="px-6 py-4">
-                <span 
-                  class="px-2.5 py-1 text-xs font-semibold rounded-full uppercase"
-                  :class="{
-                    'bg-slate-100 text-slate-600': item.prioritas === 'low',
-                    'bg-blue-50 text-blue-600': item.prioritas === 'medium',
-                    'bg-amber-50 text-amber-600': item.prioritas === 'high',
-                    'bg-rose-50 text-rose-600': item.prioritas === 'urgent'
-                  }"
-                >
-                  {{ item.prioritas }}
-                </span>
-              </td>
-              <td class="px-6 py-4">
-                <span 
-                  class="px-2.5 py-1 text-xs font-semibold rounded-full capitalize"
-                  :class="{
-                    'bg-amber-100 text-amber-700': item.status_id === 1,
-                    'bg-blue-100 text-blue-700': item.status_id === 2,
-                    'bg-emerald-100 text-emerald-700': item.status_id === 3,
-                    'bg-slate-100 text-slate-600': item.status_id === 4,
-                    'bg-rose-100 text-rose-700': item.status_id === 5
-                  }"
-                >
-                  {{ item.status?.name || '-' }}
-                </span>
-              </td>
-              <td class="px-6 py-4 text-xs">
-                <a 
-                  v-if="item.lampiran" 
-                  :href="`${storageBase}/${item.lampiran}`" 
-                  target="_blank" 
-                  class="text-indigo-600 hover:underline flex items-center gap-1 font-medium"
-                >
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                  </svg>
-                  Lihat File
-                </a>
-                <span v-else class="text-slate-400">-</span>
-              </td>
-              <td class="px-6 py-4 text-right space-x-2">
                 <button 
-                  @click="openChatModal(item)" 
+                  @click.stop="openDetailModal(item)"
                   class="relative px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition inline-flex items-center gap-1"
                 >
                   <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -815,25 +921,23 @@ onUnmounted(() => {
                     {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
                   </span>
                 </button>
-                
-                <button 
-                  @click="openEditModal(item)" 
-                  class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition"
+              </td>
+              <td class="px-6 py-4 text-right">
+                <button
+                  @click.stop="openDetailModal(item)"
+                  class="relative px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition"
                 >
-                  Edit
-                </button>
-                <button 
-                  @click="handleDelete(item.id)" 
-                  class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-50 text-rose-600 hover:bg-rose-100 transition"
-                >
-                  Hapus
+                  Detail
+                  <span v-if="unreadCounts[item.id] > 0" class="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white shadow-sm">
+                    {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
+                  </span>
                 </button>
               </td>
             </tr>
 
             <!-- Empty -->
             <tr v-if="!pending && tickets.length === 0">
-              <td colspan="8" class="px-6 py-12 text-center text-slate-400">
+              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-slate-400">
                 Data tiket aduan tidak ditemukan.
               </td>
             </tr>
@@ -962,6 +1066,139 @@ onUnmounted(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Modal Detail Tiket -->
+    <div v-if="isDetailModalOpen && detailTicket" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
+      <section role="dialog" aria-modal="true" aria-labelledby="ticket-detail-title" class="bg-white rounded-2xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+        <header class="p-5 border-b border-slate-100 flex items-start justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-xs font-mono font-semibold text-indigo-600">{{ detailTicket.nomor_tiket }}</p>
+            <h2 id="ticket-detail-title" class="mt-1 text-lg font-bold text-slate-800">Detail Tiket</h2>
+          </div>
+          <button @click="closeDetailModal" aria-label="Tutup detail" class="p-1 text-slate-400 hover:text-slate-700">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+
+        <div class="p-5 space-y-5">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+            <p class="text-slate-500">Pelapor <span class="block mt-1 text-sm font-medium text-slate-800">{{ detailTicket.user?.name || '-' }}</span></p>
+            <p class="text-slate-500">Dibuat <span class="block mt-1 text-sm font-medium text-slate-800">{{ formatDateTime(detailTicket.created_at) }}</span></p>
+            <p class="text-slate-500">Selesai <span class="block mt-1 text-sm font-medium text-slate-800">{{ formatDateTime(detailTicket.terselesaikan_pada) }}</span></p>
+          </div>
+
+          <div class="space-y-4 border-t border-slate-100 pt-4">
+            <div>
+              <h3 class="text-xs font-semibold uppercase text-slate-500">Judul Aduan</h3>
+              <p class="mt-1 text-sm font-semibold text-slate-800">{{ detailTicket.judul || '-' }}</p>
+            </div>
+            <div>
+              <h3 class="text-xs font-semibold uppercase text-slate-500">Deskripsi Aduan</h3>
+              <p class="mt-1 text-sm leading-6 text-slate-700 whitespace-pre-line">{{ detailTicket.deskripsi || '-' }}</p>
+            </div>
+            <div>
+              <h3 class="text-xs font-semibold uppercase text-slate-500">Prioritas Aduan</h3>
+              <p class="mt-1 text-sm text-slate-700 capitalize">{{ detailTicket.prioritas || '-' }}</p>
+            </div>
+            <div v-if="detailTicket.lampiran">
+              <h3 class="text-xs font-semibold uppercase text-slate-500">Lampiran</h3>
+              <a :href="attachmentUrl(detailTicket.lampiran)" target="_blank" rel="noopener noreferrer" class="mt-1 inline-block text-sm font-medium text-indigo-600 hover:underline">Lihat lampiran</a>
+            </div>
+          </div>
+
+          <div class="border-t border-slate-100 pt-4">
+            <label for="ticket-detail-status" class="block text-xs font-semibold text-slate-700 mb-1.5">Ubah Status</label>
+            <div class="flex flex-col sm:flex-row gap-2">
+              <select id="ticket-detail-status" v-model="detailStatus" class="min-w-0 flex-1 px-3 py-2 border border-slate-200 rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="" disabled>Pilih status</option>
+                <option v-for="status in statusesList" :key="status.id" :value="String(status.id)">
+                  {{ status.name || '-' }}
+                </option>
+              </select>
+              <button @click="updateTicketStatus" :disabled="updatingStatus || !detailStatus" class="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">
+                {{ updatingStatus ? 'Menyimpan...' : 'Simpan Status' }}
+              </button>
+            </div>
+            <p v-if="detailStatusError" role="alert" class="mt-2 text-xs text-rose-600">{{ detailStatusError }}</p>
+          </div>
+
+          <section class="border-t border-slate-100 pt-4">
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <h3 class="text-sm font-semibold text-slate-800">Chat Tiket</h3>
+                <p class="text-xs text-slate-500">{{ detailTicket.judul }}</p>
+              </div>
+              <button
+                v-if="canDeleteChat && chatMessages.length > 0"
+                @click="deleteAllMessages"
+                :disabled="deletingAll"
+                class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-600 bg-rose-50 hover:bg-rose-100 disabled:opacity-50"
+              >
+                {{ deletingAll ? 'Menghapus...' : 'Hapus Semua' }}
+              </button>
+            </div>
+
+            <div class="mt-3 h-56 overflow-y-auto space-y-3 rounded-lg bg-slate-50 p-3">
+              <p v-if="loadingChat" class="py-8 text-center text-xs text-slate-400">Memuat percakapan...</p>
+              <p v-else-if="chatMessages.length === 0" class="py-8 text-center text-xs text-slate-400">Belum ada diskusi untuk tiket ini.</p>
+              <div
+                v-for="message in chatMessages"
+                v-else
+                :key="message.id"
+                class="flex flex-col group"
+                :class="message.user_id === selectedTicket?.user_id ? 'items-end' : 'items-start'"
+              >
+                <p class="mb-1 px-1 text-[10px] text-slate-400">
+                  {{ message.user?.name || 'Pengguna' }} · {{ message.created_at_formatted || 'Baru saja' }}
+                </p>
+                <div class="flex max-w-[90%] items-center gap-2" :class="message.user_id === selectedTicket?.user_id ? 'flex-row-reverse' : ''">
+                  <p class="rounded-xl px-3 py-2 text-xs wrap-break-word" :class="message.user_id === selectedTicket?.user_id ? 'bg-indigo-600 text-white' : 'bg-white border border-slate-200 text-slate-700'">
+                    {{ message.message }}
+                  </p>
+                  <button
+                    v-if="canDeleteChat"
+                    @click="deleteSingleMessage(message.id)"
+                    :disabled="deletingMessageId === message.id"
+                    title="Hapus pesan"
+                    class="opacity-0 group-hover:opacity-100 p-1 text-slate-400 hover:text-rose-500 disabled:opacity-30"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <form @submit.prevent="sendMessage" class="mt-3 flex gap-2">
+              <input
+                v-model="newMessage"
+                type="text"
+                placeholder="Ketik pesan..."
+                class="min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+              <button
+                type="submit"
+                :disabled="sendingMessage || !newMessage.trim()"
+                class="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+              >
+                {{ sendingMessage ? 'Mengirim...' : 'Kirim' }}
+              </button>
+            </form>
+          </section>
+        </div>
+
+        <footer class="p-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+          <div class="flex items-center gap-2">
+            <button @click="openEditModal(detailTicket); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100">Edit</button>
+            <button v-if="canDeleteTicket" @click="handleDelete(detailTicket.id); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-rose-50 text-rose-600 hover:bg-rose-100">Hapus</button>
+            <button @click="closeDetailModal" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Tutup</button>
+          </div>
+        </footer>
+      </section>
     </div>
 
     <!-- Modal Form (Create / Edit Tiket) -->
@@ -1102,116 +1339,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- Modal Chat Tiket -->
-    <div v-if="isChatModalOpen" class="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div class="bg-white rounded-2xl shadow-xl max-w-lg w-full flex flex-col h-[600px] max-h-[90vh]">
-        
-        <!-- Header Chat -->
-        <div class="p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/50 rounded-t-2xl">
-          <div>
-            <h3 class="text-base font-bold text-slate-800">
-              Diskusi Tiket: #{{ selectedTicket?.nomor_tiket }}
-            </h3>
-            <p class="text-xs text-slate-500 truncate max-w-xs">{{ selectedTicket?.judul }}</p>
-          </div>
-          
-          <div class="flex items-center gap-2">
-            <button 
-              v-if="chatMessages.length > 0"
-              @click="deleteAllMessages"
-              :disabled="deletingAll"
-              title="Hapus Semua Percakapan"
-              class="px-2.5 py-1 text-[11px] font-medium text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-lg transition flex items-center gap-1 disabled:opacity-50"
-            >
-              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              <span>{{ deletingAll ? 'Menghapus...' : 'Hapus Semua' }}</span>
-            </button>
-
-            <button @click="closeChatModal" class="text-slate-400 hover:text-slate-600 p-1">
-              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-
-        <!-- Body Chat -->
-        <div class="flex-1 p-4 overflow-y-auto space-y-3 bg-slate-50/30">
-          <div v-if="loadingChat" class="text-center text-xs text-slate-400 py-8">
-            Memuat percakapan...
-          </div>
-          <div v-else-if="chatMessages.length === 0" class="text-center text-xs text-slate-400 py-8">
-            Belum ada diskusi untuk tiket ini.
-          </div>
-          <template v-else>
-            <div 
-              v-for="msg in chatMessages" 
-              :key="msg.id" 
-              class="flex flex-col group"
-              :class="msg.user_id === selectedTicket?.user_id ? 'items-end' : 'items-start'"
-            >
-              <div class="text-[10px] text-slate-400 mb-0.5 px-1 flex items-center gap-1">
-                <span>{{ msg.user?.name || 'Pengguna' }} • {{ msg.created_at_formatted || 'Baru saja' }}</span>
-              </div>
-
-              <div 
-                class="flex items-center gap-1.5 max-w-[85%]"
-                :class="msg.user_id === selectedTicket?.user_id ? 'flex-row-reverse' : 'flex-row'"
-              >
-                <div 
-                  class="rounded-2xl px-4 py-2.5 text-xs shadow-sm break-words flex-1"
-                  :class="
-                    msg.user_id === selectedTicket?.user_id 
-                      ? 'bg-indigo-600 text-white rounded-br-none' 
-                      : 'bg-white border border-slate-200 text-slate-700 rounded-bl-none'
-                  "
-                >
-                  {{ msg.message }}
-                </div>
-
-                <button 
-                  @click="deleteSingleMessage(msg.id)"
-                  :disabled="deletingMessageId === msg.id"
-                  title="Hapus pesan ini"
-                  class="opacity-0 group-hover:opacity-100 transition-opacity p-1 text-slate-400 hover:text-rose-500 hover:bg-slate-100 rounded-lg disabled:opacity-30"
-                >
-                  <svg v-if="deletingMessageId !== msg.id" class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                  <svg v-else class="animate-spin w-3.5 h-3.5 text-rose-500" fill="none" viewBox="0 0 24 24">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                </button>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- Form Input Chat -->
-        <form @submit.prevent="sendMessage" class="p-3 border-t border-slate-100 bg-white rounded-b-2xl flex gap-2">
-          <input 
-            v-model="newMessage" 
-            type="text" 
-            placeholder="Ketik pesan..." 
-            class="flex-1 px-3.5 py-2 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          />
-          <button 
-            type="submit" 
-            :disabled="sendingMessage || !newMessage.trim()"
-            class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium rounded-xl disabled:opacity-50 transition flex items-center gap-1"
-          >
-            <span>Kirim</span>
-            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
-            </svg>
-          </button>
-        </form>
-
-      </div>
-    </div>
   </div>
 </template>
 

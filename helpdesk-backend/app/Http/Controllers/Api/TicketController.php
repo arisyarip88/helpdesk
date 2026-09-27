@@ -37,6 +37,8 @@ class TicketController extends Controller
             // Role 3 selalu dibatasi ke departemen user, bukan nilai dari request.
             $query->where('department_id', $user?->department_id)
                 ->where('status_id', '!=', 1);
+        } elseif (in_array((int) $roleId, [1, 2], true) && $request->filled('department_id')) {
+            $query->where('department_id', $departmentId);
         }
         //  elseif ($request->filled('department_id')) {
         //     $query->where('department_id', $departmentId);
@@ -205,8 +207,14 @@ class TicketController extends Controller
             $this->handleLampiranUpload($request, $ticket, $validated);
         }
 
-        if (isset($validated['status_id']) && in_array($validated['status_id'], [4, 5])) {
-            $validated['terselesaikan_pada'] = now();
+        if (isset($validated['status_id'])) {
+            $statusId = (int) $validated['status_id'];
+            $validated['terselesaikan_pada'] = in_array($statusId, [4, 5], true)
+                ? now()
+                : null;
+            if ($statusId !== 4) {
+                $validated['rating'] = null;
+            }
         }
 
         $ticket->update($validated);
@@ -214,6 +222,29 @@ class TicketController extends Controller
         return response()->json([
             'message' => 'Tiket berhasil diperbarui',
             'data'    => $ticket->load(['user', 'department', 'status'])
+        ]);
+    }
+
+    public function rate(Request $request, $id)
+    {
+        $ticket = Ticket::findOrFail($id);
+
+        abort_unless((int) $ticket->user_id === (int) $request->user()->id, 403);
+        abort_unless((int) $ticket->status_id === 4, 422, 'Rating hanya dapat diberikan untuk tiket yang sudah ditutup.');
+
+        if ($ticket->rating !== null) {
+            return response()->json(['message' => 'Rating untuk tiket ini sudah diberikan.'], 422);
+        }
+
+        $validated = $request->validate([
+            'rating' => 'required|integer|between:1,5',
+        ]);
+
+        $ticket->update($validated);
+
+        return response()->json([
+            'message' => 'Terima kasih atas rating yang diberikan.',
+            'data' => $ticket,
         ]);
     }
 
@@ -246,7 +277,12 @@ class TicketController extends Controller
             Ticket::whereIn('id', $ids)->delete();
             $message = count($ids) . ' tiket berhasil dihapus.';
         } elseif ($action === 'change_status') {
-            Ticket::whereIn('id', $ids)->update(['status_id' => $request->value]);
+            $statusId = (int) $request->value;
+            $updates = ['status_id' => $statusId];
+            if ($statusId !== 4) {
+                $updates['rating'] = null;
+            }
+            Ticket::whereIn('id', $ids)->update($updates);
             $message = 'Status untuk ' . count($ids) . ' tiket berhasil diperbarui.';
         } elseif ($action === 'change_priority') {
             Ticket::whereIn('id', $ids)->update(['prioritas' => $request->value]);

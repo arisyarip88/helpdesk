@@ -26,7 +26,7 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::post('/loginSso', [AuthController::class, 'loginSso']);
 
 // Endpoint Chatbot Landing Page
-Route::post('/chatbot/ask', [KnowledgeBaseController::class, 'searchAnswer']);
+Route::post('/chatbot/ask', [KnowledgeBaseController::class, 'searchAnswer'])->middleware('throttle:60,1');
 
 // Protected Routes (Sanctum Authenticated)
 Route::middleware('auth:sanctum')->group(function () {
@@ -46,6 +46,9 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:1,2')->group(function () {
         Route::apiResource('/users', UserController::class);
         Route::apiResource('/departments', DepartmentController::class);
+        Route::get('/knowledge-base/unanswered', [KnowledgeBaseController::class, 'unanswered']);
+        Route::post('/knowledge-base/unanswered/{question}/knowledge', [KnowledgeBaseController::class, 'convertUnanswered']);
+        Route::delete('/knowledge-base/unanswered/{question}', [KnowledgeBaseController::class, 'destroyUnanswered']);
         Route::apiResource('knowledge-base', KnowledgeBaseController::class);
     });
 
@@ -66,6 +69,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::delete('/tickets/{ticket}/messages/{message}', [TicketMessageController::class, 'destroy']);
     });
 
+    Route::middleware('role:4')->post('/tickets/{id}/rating', [TicketController::class, 'rate']);
+
     Route::middleware('role:1,2,3')->prefix('analytics')->group(function () {
     Route::get('/departments', [TicketAnalyticsController::class, 'getDepartments']);
     Route::get('/ticket-status', [TicketAnalyticsController::class, 'getStatusStats']);
@@ -73,6 +78,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/resolution-time', [TicketAnalyticsController::class, 'getResolutionTime']);
     Route::get('/summary', [TicketAnalyticsController::class, 'getSummary']);
     Route::get('/priority_recent', [TicketAnalyticsController::class, 'getPriorityAndRecent']);
+    Route::get('/rating-ranking', [TicketAnalyticsController::class, 'getRatingRanking']);
     });
 
     Route::middleware('role:1,2,3')->prefix('reports')->group(function () {

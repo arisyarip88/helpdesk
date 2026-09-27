@@ -307,16 +307,24 @@ const handleSubmit = async () => {
 
 // DELETE TIKET
 const handleDelete = async (id) => {
-  if (confirm('Apakah Anda yakin ingin menghapus tiket aduan ini?')) {
-    try {
-      await $fetch(`${apiBase}/tickets/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      })
-      await refresh()
-    } catch (err) {
-      alert(err.data?.message || 'Gagal menghapus tiket.')
-    }
+  const confirmed = await requestActionConfirmation(
+    'Hapus tiket?',
+    'Tiket yang dihapus tidak dapat dipulihkan.',
+    'Hapus tiket'
+  )
+  if (!confirmed) return
+
+  isDeletingTicket.value = true
+  try {
+    await $fetch(`${apiBase}/tickets/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    })
+    await refresh()
+  } catch (err) {
+    showActionNotice('Tiket gagal dihapus', err.data?.message || 'Terjadi kesalahan saat menghapus tiket.')
+  } finally {
+    isDeletingTicket.value = false
   }
 }
 
@@ -329,12 +337,61 @@ const sendingMessage = ref(false)
 const deletingMessageId = ref(null)
 const deletingAll = ref(false)
 const newMessage = ref('')
+const isRatingModalOpen = ref(false)
+const ratingTicket = ref(null)
+const ratingValue = ref(0)
+const submittingRating = ref(false)
+const ratingError = ref('')
+const isDeletingTicket = ref(false)
+const isActionDialogOpen = ref(false)
+const actionDialog = ref({
+  title: '',
+  message: '',
+  confirmLabel: 'Mengerti',
+  cancelLabel: 'Batal',
+  isConfirmation: false,
+  tone: 'info'
+})
+
+let actionDialogResolver = null
+
+const requestActionConfirmation = (title, message, confirmLabel = 'Ya, lanjutkan') => new Promise((resolve) => {
+  actionDialog.value = { title, message, confirmLabel, cancelLabel: 'Batal', isConfirmation: true, tone: 'danger' }
+  actionDialogResolver = resolve
+  isActionDialogOpen.value = true
+})
+
+const showActionNotice = (title, message) => {
+  actionDialog.value = { title, message, confirmLabel: 'Mengerti', cancelLabel: '', isConfirmation: false, tone: 'info' }
+  isActionDialogOpen.value = true
+}
+
+const closeActionDialog = (confirmed = false) => {
+  isActionDialogOpen.value = false
+  if (actionDialogResolver) {
+    actionDialogResolver(confirmed)
+    actionDialogResolver = null
+  }
+}
+
+const globalLoadingMessage = computed(() => {
+  if (pending.value && !responseData.value) return 'Memuat tiket...'
+  if (isDeletingTicket.value) return 'Menghapus tiket...'
+  if (submitting.value) return 'Menyimpan tiket...'
+  if (sendingMessage.value) return 'Mengirim pesan...'
+  if (deletingAll.value) return 'Menghapus percakapan...'
+  if (deletingMessageId.value !== null) return 'Menghapus pesan...'
+  if (submittingRating.value) return 'Menyimpan rating...'
+  if (loadingChat.value) return 'Memuat percakapan...'
+  return ''
+})
 
 const unreadCounts = ref({})
 const lastMessageCounts = ref({})
 
 let chatInterval = null
 let globalPollInterval = null
+let ticketStatusRefreshInterval = null
 
 const playNotificationSound = () => {
   try {
@@ -367,7 +424,16 @@ const openChatModal = async (ticket) => {
   }, 3000)
 }
 
+const openTicketRating = (ticket) => {
+  if (Number(ticket?.status_id) !== 4 || ticket.rating) return
+  ratingTicket.value = ticket
+  ratingValue.value = 0
+  ratingError.value = ''
+  isRatingModalOpen.value = true
+}
+
 const closeChatModal = () => {
+  const closedTicket = selectedTicket.value
   isChatModalOpen.value = false
   selectedTicket.value = null
   chatMessages.value = []
@@ -376,6 +442,29 @@ const closeChatModal = () => {
   if (chatInterval) {
     clearInterval(chatInterval)
     chatInterval = null
+  }
+
+  openTicketRating(closedTicket)
+}
+
+const submitTicketRating = async () => {
+  if (!ratingTicket.value || !ratingValue.value) return
+
+  submittingRating.value = true
+  ratingError.value = ''
+  try {
+    await $fetch(`${apiBase}/tickets/${ratingTicket.value.id}/rating`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: { rating: ratingValue.value }
+    })
+    isRatingModalOpen.value = false
+    ratingTicket.value = null
+    await refresh()
+  } catch (err) {
+    ratingError.value = err.data?.message || 'Gagal menyimpan rating.'
+  } finally {
+    submittingRating.value = false
   }
 }
 
@@ -417,14 +506,19 @@ const sendMessage = async () => {
     newMessage.value = ''
     await fetchMessages(true)
   } catch (err) {
-    alert(err.data?.message || 'Gagal mengirim pesan.')
+    showActionNotice('Pesan gagal dikirim', err.data?.message || 'Terjadi kesalahan saat mengirim pesan.')
   } finally {
     sendingMessage.value = false
   }
 }
 
 const deleteSingleMessage = async (messageId) => {
-  if (!confirm('Apakah Anda yakin ingin menghapus pesan ini?')) return
+  const confirmed = await requestActionConfirmation(
+    'Hapus pesan?',
+    'Pesan ini akan dihapus dari percakapan tiket.',
+    'Hapus pesan'
+  )
+  if (!confirmed) return
   
   deletingMessageId.value = messageId
   try {
@@ -437,14 +531,19 @@ const deleteSingleMessage = async (messageId) => {
       lastMessageCounts.value[selectedTicket.value.id]--
     }
   } catch (err) {
-    alert(err.data?.message || 'Gagal menghapus pesan.')
+    showActionNotice('Pesan gagal dihapus', err.data?.message || 'Terjadi kesalahan saat menghapus pesan.')
   } finally {
     deletingMessageId.value = null
   }
 }
 
 const deleteAllMessages = async () => {
-  if (!confirm('Apakah Anda yakin ingin menghapus SELURUH pesan percakapan pada tiket ini?')) return
+  const confirmed = await requestActionConfirmation(
+    'Bersihkan seluruh chat?',
+    'Semua pesan pada percakapan tiket ini akan dihapus dan tidak dapat dipulihkan.',
+    'Hapus semua chat'
+  )
+  if (!confirmed) return
 
   deletingAll.value = true
   try {
@@ -456,7 +555,7 @@ const deleteAllMessages = async () => {
     lastMessageCounts.value[selectedTicket.value.id] = 0
     unreadCounts.value[selectedTicket.value.id] = 0
   } catch (err) {
-    alert(err.data?.message || 'Gagal menghapus semua pesan.')
+    showActionNotice('Chat gagal dihapus', err.data?.message || 'Terjadi kesalahan saat menghapus percakapan.')
   } finally {
     deletingAll.value = false
   }
@@ -491,11 +590,15 @@ onMounted(() => {
   globalPollInterval = setInterval(() => {
     checkGlobalUnreadMessages()
   }, 7000)
+  ticketStatusRefreshInterval = setInterval(() => {
+    Promise.all([refresh(), refreshStats()])
+  }, 15000)
 })
 
 onUnmounted(() => {
   if (chatInterval) clearInterval(chatInterval)
   if (globalPollInterval) clearInterval(globalPollInterval)
+  if (ticketStatusRefreshInterval) clearInterval(ticketStatusRefreshInterval)
 })
 
 
@@ -521,9 +624,9 @@ const toggleStatusFilter = (statusId) => {
       <h1 class="text-lg sm:text-xl font-bold text-slate-800">
         Selamat Datang, {{ user?.name || 'User' }}! 
       </h1>
-      <span class="px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100">
+      <!-- <span class="px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-wider bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100">
         {{ user?.role_name || 'Client' }}
-      </span>
+      </span> -->
     </div>
     <p class="text-xs sm:text-sm text-slate-500">
       Pantau dan kelola tiket pengaduan layanan akademik & teknis UNPAM Anda di sini.
@@ -779,6 +882,19 @@ const toggleStatusFilter = (statusId) => {
               >
                 {{ item.prioritas }}
               </span>
+
+              <div v-if="item.rating" class="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs" :aria-label="`Rating Anda ${item.rating} dari 5`">
+                <span aria-hidden="true" class="text-amber-500">★★★★★</span>
+                <span class="font-semibold text-amber-700">{{ item.rating }}/5</span>
+              </div>
+              <button
+                v-else-if="Number(item.status_id) === 4"
+                type="button"
+                @click="openTicketRating(item)"
+                class="rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 hover:bg-amber-100"
+              >
+                Beri rating
+              </button>
             </div>
 
             <!-- Judul Aduan -->
@@ -1319,5 +1435,60 @@ const toggleStatusFilter = (statusId) => {
 
   </div>
 </div>
+    <div v-if="isRatingModalOpen && ratingTicket" class="fixed inset-0 z-[60] flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+      <section role="dialog" aria-modal="true" aria-labelledby="ticket-rating-title" class="relative w-full max-w-md rounded-2xl bg-white p-6 text-center shadow-2xl">
+        <button
+          type="button"
+          aria-label="Tutup rating"
+          @click="isRatingModalOpen = false; ratingTicket = null"
+          class="absolute right-4 top-4 rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+        >
+          <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+        <p class="text-xs font-mono font-semibold text-indigo-600">{{ ratingTicket.nomor_tiket }}</p>
+        <h2 id="ticket-rating-title" class="mt-2 text-lg font-bold text-slate-800">Beri Rating Layanan</h2>
+        <p class="mt-1 text-sm text-slate-500">Bagaimana pengalaman Anda untuk tiket “{{ ratingTicket.judul }}”?</p>
+
+        <div role="radiogroup" aria-label="Pilih rating" class="mt-5 flex justify-center gap-2">
+          <button
+            v-for="star in 5"
+            :key="star"
+            type="button"
+            role="radio"
+            :aria-label="`${star} bintang`"
+            :aria-checked="ratingValue === star"
+            @click="ratingValue = star"
+            class="rounded-lg p-1 text-4xl leading-none transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-amber-400"
+            :class="ratingValue >= star ? 'text-amber-400' : 'text-slate-300'"
+          >
+            ★
+          </button>
+        </div>
+        <p class="mt-2 min-h-5 text-xs font-medium text-slate-500">
+          {{ ['Pilih rating', 'Kurang baik', 'Cukup', 'Baik', 'Sangat baik', 'Luar biasa'][ratingValue] }}
+        </p>
+        <p v-if="ratingError" role="alert" class="mt-3 text-xs text-rose-600">{{ ratingError }}</p>
+
+        <div class="mt-5 flex justify-center gap-2">
+          <button
+            type="button"
+            @click="isRatingModalOpen = false; ratingTicket = null"
+            class="rounded-lg px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-100"
+          >
+            Nanti
+          </button>
+          <button
+            type="button"
+            @click="submitTicketRating"
+            :disabled="!ratingValue || submittingRating"
+            class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+          >
+            {{ submittingRating ? 'Mengirim...' : 'Kirim Rating' }}
+          </button>
+        </div>
+      </section>
+    </div>
   </div>
 </template>

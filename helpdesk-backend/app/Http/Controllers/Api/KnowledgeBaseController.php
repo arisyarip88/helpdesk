@@ -4,7 +4,9 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\KnowledgeBase;
+use App\Models\UnansweredChatQuestion;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class KnowledgeBaseController extends Controller
 {
@@ -131,11 +133,66 @@ class KnowledgeBaseController extends Controller
      */
     public function destroy(KnowledgeBase $knowledgeBase)
     {
+        UnansweredChatQuestion::where('knowledge_base_id', $knowledgeBase->id)
+            ->update(['knowledge_base_id' => null, 'resolved_at' => null]);
+
         $knowledgeBase->delete();
 
         return response()->json([
             'message' => 'Pengetahuan berhasil dihapus'
         ], 200);
+    }
+
+    public function unanswered(Request $request)
+    {
+        $questions = UnansweredChatQuestion::whereNull('resolved_at')
+            ->when($request->filled('search'), fn ($query) => $query->where('question', 'like', '%' . $request->input('search') . '%'))
+            ->latest('last_asked_at')
+            ->paginate(20);
+
+        return response()->json($questions);
+    }
+
+    public function convertUnanswered(Request $request, UnansweredChatQuestion $question)
+    {
+        abort_if($question->resolved_at, 422, 'Pertanyaan ini sudah ditangani.');
+
+        $validated = $request->validate([
+            'keywords' => 'required|array|min:1',
+            'keywords.*' => 'required|string|max:80',
+            'answer' => 'required|string|max:5000',
+        ]);
+
+        $knowledgeBase = DB::transaction(function () use ($validated, $question) {
+            $knowledgeBase = KnowledgeBase::create([
+                'question' => $question->question,
+                'keywords' => $validated['keywords'],
+                'response_type' => 'text',
+                'answer' => $validated['answer'],
+                'options' => [],
+                'is_active' => true,
+            ]);
+
+            $question->update([
+                'knowledge_base_id' => $knowledgeBase->id,
+                'resolved_at' => now(),
+            ]);
+
+            return $knowledgeBase;
+        });
+
+        return response()->json([
+            'message' => 'Knowledge berhasil dibuat dari pertanyaan chatbot.',
+            'data' => $knowledgeBase,
+        ], 201);
+    }
+
+    public function destroyUnanswered(UnansweredChatQuestion $question)
+    {
+        abort_if($question->resolved_at, 404);
+        $question->delete();
+
+        return response()->json(['message' => 'Pertanyaan belum terjawab berhasil dihapus.']);
     }
 
     /**
@@ -145,7 +202,7 @@ class KnowledgeBaseController extends Controller
     public function searchAnswer(Request $request)
     {
         $request->validate([
-            'message' => 'required|string',
+            'message' => 'required|string|max:2000',
         ]);
 
         $userMessage = strtolower($request->input('message'));
@@ -174,6 +231,24 @@ class KnowledgeBaseController extends Controller
                 }
             }
         }
+
+        $question = trim($request->input('message'));
+        $normalizedQuestion = mb_strtolower($question);
+        $normalizedQuestion = preg_replace('/[^\p{L}\p{N}\s]/u', ' ', $normalizedQuestion) ?? $normalizedQuestion;
+        $normalizedQuestion = trim(preg_replace('/\s+/u', ' ', $normalizedQuestion) ?? $normalizedQuestion);
+        $questionHash = hash('sha256', $normalizedQuestion ?: mb_strtolower($question));
+
+        $unansweredQuestion = UnansweredChatQuestion::firstOrNew(['question_hash' => $questionHash]);
+        if (!$unansweredQuestion->exists) {
+            $unansweredQuestion->question = $question;
+            $unansweredQuestion->occurrences = 0;
+        } elseif ($unansweredQuestion->resolved_at) {
+            $unansweredQuestion->resolved_at = null;
+            $unansweredQuestion->knowledge_base_id = null;
+        }
+        $unansweredQuestion->occurrences++;
+        $unansweredQuestion->last_asked_at = now();
+        $unansweredQuestion->save();
 
         // Jawaban default jika tidak ada kata kunci yang cocok
         return response()->json([

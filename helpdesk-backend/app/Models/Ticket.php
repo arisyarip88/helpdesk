@@ -17,12 +17,14 @@ class Ticket extends Model
         'comment',
         'prioritas',
         'status_id',
+        'rating',
         'lampiran',
         'terselesaikan_pada'
     ];
 
     protected $casts = [
         'terselesaikan_pada' => 'datetime',
+        'rating' => 'integer',
     ];
 
     public function user()
