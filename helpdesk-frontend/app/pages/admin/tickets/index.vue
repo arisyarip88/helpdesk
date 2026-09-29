@@ -1014,16 +1014,6 @@ onUnmounted(() => {
               <td class="px-6 py-4">
                 <div class="flex flex-col items-start gap-1.5">
                   <span class="font-mono text-xs font-bold text-indigo-600">{{ item.nomor_tiket }}</span>
-                  <span
-                    v-if="[1, 2, 3].includes(userRoleId) && hasExceededWarningDeadline(item)"
-                    class="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700"
-                    :title="`Tiket melewati batas penanganan ${warningMaxHours} jam`"
-                  >
-                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
-                    </svg>
-                    Melewati batas
-                  </span>
                   <button
                     v-if="warningMode === 'manual' && [1, 2].includes(userRoleId) && hasExceededWarningDeadline(item)"
                     type="button"
