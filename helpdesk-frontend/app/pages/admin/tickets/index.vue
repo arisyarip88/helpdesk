@@ -11,6 +11,7 @@ const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 const storageBase = config.public.storageBase || apiBase.replace(/\/api\/?$/, '') + '/storage'
 
 const { token, user, hasRole } = useAuth()
+const notify = useNotify()
 const route = useRoute()
 const router = useRouter()
 
@@ -24,6 +25,26 @@ const getAuthHeaders = () => ({
   'Authorization': `Bearer ${token.value}`
 })
 
+const fetchWarningMode = async () => {
+  try {
+    const endpoint = userRoleId.value === 3
+      ? `${apiBase}/ticket-warnings`
+      : `${apiBase}/ticket-handling-settings`
+    const response = await $fetch(endpoint, {
+      headers: getAuthHeaders()
+    })
+    warningMode.value = response.alert_mode || response.data?.alert_mode || 'automatic'
+    warningMaxHours.value = Number(response.max_hours || response.data?.max_hours) || 24
+  } catch {
+    warningMode.value = 'automatic'
+    warningMaxHours.value = 24
+  }
+}
+
+watch(userRoleId, (roleId) => {
+  if ([1, 2, 3].includes(roleId)) fetchWarningMode()
+}, { immediate: true })
+
 // --- 1. STATE FILTER & PAGINASI ---
 const currentPage = ref(Number(route.query.page) || 1)
 const perPage = ref(Number(route.query.per_page) || 10)
@@ -31,10 +52,21 @@ const searchQuery = ref(String(route.query.search || ''))
 const selectedStatusFilter = ref(String(route.query.status_id || ''))
 const selectedDepartmentFilter = ref(String(route.query.department_id || ''))
 const selectedPriorityFilter = ref(String(route.query.prioritas || ''))
+const overdueOnly = ref(String(route.query.overdue || '') === '1')
 const canFilterDepartment = computed(() => [1, 2].includes(userRoleId.value))
 const showPriorityStatus = computed(() => [1, 2, 3].includes(userRoleId.value))
 const canDeleteChat = computed(() => ![3, 4].includes(userRoleId.value))
 const canDeleteTicket = computed(() => userRoleId.value !== 3)
+const sendingWarningTicketId = ref(null)
+const warningMode = ref('automatic')
+const warningMaxHours = ref(24)
+
+const hasExceededWarningDeadline = (ticket) => {
+  if (!ticket?.created_at || [4, 5].includes(Number(ticket.status_id))) return false
+
+  const createdAt = new Date(ticket.created_at).getTime()
+  return Number.isFinite(createdAt) && Date.now() - createdAt >= warningMaxHours.value * 60 * 60 * 1000
+}
 
 // Sinkronisasi State jika Query URL berubah
 watch(
@@ -46,6 +78,7 @@ watch(
     selectedStatusFilter.value = String(newQuery.status_id || '')
     selectedDepartmentFilter.value = String(newQuery.department_id || '')
     selectedPriorityFilter.value = String(newQuery.prioritas || '')
+    overdueOnly.value = String(newQuery.overdue || '') === '1'
   }
 )
 
@@ -67,7 +100,8 @@ const updateQueryParams = () => {
       search: searchQuery.value || undefined,
       status_id: selectedStatusFilter.value || undefined,
       department_id: canFilterDepartment.value ? selectedDepartmentFilter.value || undefined : undefined,
-      prioritas: showPriorityStatus.value ? selectedPriorityFilter.value || undefined : undefined
+      prioritas: showPriorityStatus.value ? selectedPriorityFilter.value || undefined : undefined,
+      overdue: overdueOnly.value ? 1 : undefined
     }
   })
 }
@@ -84,17 +118,18 @@ const { data: responseData, pending, error, refresh } = await useAsyncData(
       status_id: selectedStatusFilter.value,
       department_id: canFilterDepartment.value ? selectedDepartmentFilter.value : undefined,
       prioritas: showPriorityStatus.value ? selectedPriorityFilter.value : undefined,
+      overdue: overdueOnly.value ? 1 : undefined,
       role_id: userRoleId.value,
       user_id: userId.value
     }
   }),
   {
-    watch: [currentPage, perPage, searchQuery, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter],
+    watch: [currentPage, perPage, searchQuery, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly],
     getCachedData: () => undefined
   }
 )
 
-watch([currentPage, perPage, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter], () => {
+watch([currentPage, perPage, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly], () => {
   updateQueryParams()
 })
 
@@ -116,7 +151,9 @@ const handleSearch = () => {
 
 // Computed Data List
 const tickets = computed(() => responseData.value?.data?.data || responseData.value?.data || [])
+const overdueTicketCount = computed(() => Number(responseData.value?.overdue_count) || 0)
 const departmentsList = computed(() => responseData.value?.departments || [])
+const categoriesList = computed(() => responseData.value?.categories || [])
 const assigneesList = computed(() => responseData.value?.assignees || [])
 const statusesList = computed(() => responseData.value?.statuses || [])
 
@@ -140,6 +177,21 @@ const formatDateTime = (value) => {
     timeStyle: 'short'
   }).format(date)
 }
+
+const priorityBadgeClass = (prioritas) => ({
+  'bg-slate-100 text-slate-600': prioritas === 'low',
+  'bg-blue-50 text-blue-600': prioritas === 'medium',
+  'bg-amber-50 text-amber-600': prioritas === 'high',
+  'bg-rose-50 text-rose-600': prioritas === 'urgent'
+})
+
+const statusBadgeClass = (statusId) => ({
+  'bg-amber-100 text-amber-700': Number(statusId) === 1,
+  'bg-blue-100 text-blue-700': Number(statusId) === 2,
+  'bg-emerald-100 text-emerald-700': Number(statusId) === 3,
+  'bg-slate-100 text-slate-600': Number(statusId) === 4,
+  'bg-rose-100 text-rose-700': Number(statusId) === 5
+})
 
 const formatResolutionDuration = (createdAt, completedAt) => {
   if (!createdAt || !completedAt) return 'Belum selesai'
@@ -205,6 +257,9 @@ const isBulkModalOpen = ref(false)
 const bulkActionType = ref('') // 'delete', 'change_status', 'change_priority'
 const bulkActionValue = ref('')
 const submittingBulk = ref(false)
+const selectedOverdueCount = computed(() => tickets.value.filter(ticket =>
+  selectedIds.value.includes(ticket.id) && hasExceededWarningDeadline(ticket)
+).length)
 
 const isSelectAll = computed({
   get: () => tickets.value.length > 0 && selectedIds.value.length === tickets.value.length,
@@ -229,7 +284,7 @@ const executeBulkAction = async () => {
 
   submittingBulk.value = true
   try {
-    await $fetch(`${apiBase}/tickets/bulk-action`, {
+    const response = await $fetch(`${apiBase}/tickets/bulk-action`, {
       method: 'POST',
       headers: getAuthHeaders(),
       body: {
@@ -243,8 +298,11 @@ const executeBulkAction = async () => {
     isBulkModalOpen.value = false
     await refresh()
     if (refreshStats) await refreshStats()
+    if (bulkActionType.value === 'send_warning') {
+      notify.success(response.message || 'Peringatan bulk berhasil dikirim.')
+    }
   } catch (err) {
-    alert(err.data?.message || 'Gagal memproses bulk action.')
+    notify.error(err.data?.message || 'Gagal memproses bulk action.')
   } finally {
     submittingBulk.value = false
   }
@@ -260,7 +318,7 @@ const imagePreviewUrl = ref('')
 
 const form = ref({
   id: null,
-  department_id: '',
+  category_id: '',
   judul: '',
   deskripsi: '',
   prioritas: 'medium',
@@ -293,7 +351,7 @@ const openCreateModal = () => {
   formError.value = ''
   form.value = {
     id: null,
-    department_id: departmentsList.value[0]?.kode || departmentsList.value[0]?.id || '',
+    category_id: categoriesList.value[0]?.id || '',
     judul: '',
     deskripsi: '',
     prioritas: 'medium',
@@ -312,7 +370,7 @@ const openEditModal = (item) => {
   formError.value = ''
   form.value = {
     id: item.id,
-    department_id: item.department_id || '',
+    category_id: item.category_id || item.category?.id || '',
     judul: item.judul || '',
     deskripsi: item.deskripsi || '',
     prioritas: item.prioritas || 'medium',
@@ -337,7 +395,7 @@ const handleSubmit = async () => {
 
   const formData = new FormData()
   formData.append('user_id', userId.value || '')
-  formData.append('department_id', form.value.department_id)
+  formData.append('category_id', form.value.category_id)
   formData.append('status_id', form.value.status_id || 1)
   formData.append('judul', form.value.judul)
   formData.append('deskripsi', form.value.deskripsi)
@@ -384,16 +442,35 @@ const handleSubmit = async () => {
 // DELETE TIKET
 const handleDelete = async (id) => {
   if (!canDeleteTicket.value) return
-  if (confirm('Apakah Anda yakin ingin menghapus tiket aduan ini?')) {
-    try {
-      await $fetch(`${apiBase}/tickets/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      })
-      await Promise.all([refresh(), refreshStats()])
-    } catch (err) {
-      alert(err.data?.message || 'Gagal menghapus tiket.')
-    }
+  if (!(await notify.confirm({ title: 'Hapus Tiket', message: 'Apakah Anda yakin ingin menghapus tiket aduan ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
+
+  try {
+    await $fetch(`${apiBase}/tickets/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    })
+    await Promise.all([refresh(), refreshStats()])
+    notify.success('Tiket berhasil dihapus.')
+  } catch (err) {
+    notify.error(err.data?.message || 'Gagal menghapus tiket.')
+  }
+}
+
+const sendTicketWarning = async (ticket) => {
+  if (![1, 2].includes(userRoleId.value) || warningMode.value !== 'manual' || [4, 5].includes(Number(ticket.status_id))) return
+  if (!(await notify.confirm({ title: 'Kirim Peringatan', message: `Kirim peringatan penanganan untuk tiket ${ticket.nomor_tiket}?` }))) return
+
+  sendingWarningTicketId.value = ticket.id
+  try {
+    const response = await $fetch(`${apiBase}/tickets/${ticket.id}/warnings`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    })
+    notify.success(response.message || 'Peringatan berhasil dikirim.')
+  } catch (err) {
+    notify.error(err.data?.message || 'Gagal mengirim peringatan tiket.')
+  } finally {
+    sendingWarningTicketId.value = null
   }
 }
 
@@ -410,13 +487,46 @@ const newMessage = ref('')
 const isDetailModalOpen = ref(false)
 const detailTicket = ref(null)
 const detailStatus = ref('')
-const updatingStatus = ref(false)
-const detailStatusError = ref('')
+const detailCategoryId = ref('')
+const savingTicketDetails = ref(false)
+const detailSaveError = ref('')
+const detailCategorySearch = ref('')
+const isDetailCategoryDropdownOpen = ref(false)
+const canEditTicketCategory = computed(() => [1, 2].includes(userRoleId.value))
+const hasTicketDetailChanges = computed(() => {
+  if (!detailTicket.value) return false
+
+  const categoryChanged = canEditTicketCategory.value &&
+    Number(detailCategoryId.value) !== Number(detailTicket.value.category_id)
+  const statusChanged = Number(detailStatus.value) !== Number(detailTicket.value.status_id)
+
+  return categoryChanged || statusChanged
+})
+const selectedDetailCategory = computed(() =>
+  categoriesList.value.find(category => Number(category.id) === Number(detailCategoryId.value)) || detailTicket.value?.category
+)
+const filteredDetailCategories = computed(() => {
+  const search = detailCategorySearch.value.trim().toLocaleLowerCase()
+  if (!search) return categoriesList.value
+
+  return categoriesList.value.filter(category =>
+    `${category.name} ${category.department?.nama || ''}`.toLocaleLowerCase().includes(search)
+  )
+})
+
+const selectDetailCategory = (category) => {
+  detailCategoryId.value = String(category.id)
+  detailCategorySearch.value = ''
+  isDetailCategoryDropdownOpen.value = false
+}
 
 const openDetailModal = (ticket) => {
   detailTicket.value = ticket
   detailStatus.value = String(ticket.status_id || '')
-  detailStatusError.value = ''
+  detailCategoryId.value = String(ticket.category_id || ticket.category?.id || '')
+  detailSaveError.value = ''
+  detailCategorySearch.value = ''
+  isDetailCategoryDropdownOpen.value = false
   isDetailModalOpen.value = true
   openTicketChat(ticket)
 }
@@ -424,35 +534,50 @@ const openDetailModal = (ticket) => {
 const closeDetailModal = () => {
   isDetailModalOpen.value = false
   detailTicket.value = null
-  detailStatusError.value = ''
+  detailSaveError.value = ''
+  detailCategorySearch.value = ''
+  isDetailCategoryDropdownOpen.value = false
   closeTicketChat()
 }
 
-const updateTicketStatus = async () => {
-  if (!detailTicket.value || !detailStatus.value) return
+const saveTicketDetails = async () => {
+  if (!detailTicket.value || !hasTicketDetailChanges.value) return
 
-  updatingStatus.value = true
-  detailStatusError.value = ''
+  const payload = {}
+  if (Number(detailStatus.value) !== Number(detailTicket.value.status_id)) {
+    payload.status_id = Number(detailStatus.value)
+  }
+  if (canEditTicketCategory.value && Number(detailCategoryId.value) !== Number(detailTicket.value.category_id)) {
+    payload.category_id = Number(detailCategoryId.value)
+  }
+  if (userRoleId.value === 4 && detailTicket.value.category_id) {
+    payload.category_id = Number(detailTicket.value.category_id)
+  }
+
+  savingTicketDetails.value = true
+  detailSaveError.value = ''
   try {
     const response = await $fetch(`${apiBase}/tickets/${detailTicket.value.id}`, {
       method: 'PUT',
       headers: getAuthHeaders(),
-      body: { status_id: Number(detailStatus.value) }
+      body: payload
     })
     if (response.data) {
       detailTicket.value = response.data
       detailStatus.value = String(response.data.status_id)
+      detailCategoryId.value = String(response.data.category_id || '')
     }
     await Promise.all([refresh(), refreshStats()])
     const updatedTicket = tickets.value.find(ticket => ticket.id === detailTicket.value.id)
     if (updatedTicket) {
       detailTicket.value = updatedTicket
       detailStatus.value = String(updatedTicket.status_id)
+      detailCategoryId.value = String(updatedTicket.category_id || '')
     }
   } catch (err) {
-    detailStatusError.value = err.data?.message || 'Gagal mengubah status tiket.'
+    detailSaveError.value = err.data?.message || 'Gagal menyimpan perubahan tiket.'
   } finally {
-    updatingStatus.value = false
+    savingTicketDetails.value = false
   }
 }
 
@@ -545,7 +670,7 @@ const sendMessage = async () => {
     newMessage.value = ''
     await fetchMessages(true)
   } catch (err) {
-    alert(err.data?.message || 'Gagal mengirim pesan.')
+    notify.error(err.data?.message || 'Gagal mengirim pesan.')
   } finally {
     sendingMessage.value = false
   }
@@ -553,8 +678,8 @@ const sendMessage = async () => {
 
 const deleteSingleMessage = async (messageId) => {
   if (!canDeleteChat.value || !selectedTicket.value) return
-  if (!confirm('Apakah Anda yakin ingin menghapus pesan ini?')) return
-  
+  if (!(await notify.confirm({ title: 'Hapus Pesan', message: 'Apakah Anda yakin ingin menghapus pesan ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
+
   deletingMessageId.value = messageId
   try {
     await $fetch(`${apiBase}/tickets/${selectedTicket.value.id}/messages/${messageId}`, {
@@ -566,7 +691,7 @@ const deleteSingleMessage = async (messageId) => {
       lastMessageCounts.value[selectedTicket.value.id]--
     }
   } catch (err) {
-    alert(err.data?.message || 'Gagal menghapus pesan.')
+    notify.error(err.data?.message || 'Gagal menghapus pesan.')
   } finally {
     deletingMessageId.value = null
   }
@@ -574,7 +699,7 @@ const deleteSingleMessage = async (messageId) => {
 
 const deleteAllMessages = async () => {
   if (!canDeleteChat.value || !selectedTicket.value) return
-  if (!confirm('Apakah Anda yakin ingin menghapus SELURUH pesan percakapan pada tiket ini?')) return
+  if (!(await notify.confirm({ title: 'Hapus Semua Pesan', message: 'Apakah Anda yakin ingin menghapus SELURUH pesan percakapan pada tiket ini?', confirmText: 'Ya, Hapus Semua', variant: 'danger' }))) return
 
   deletingAll.value = true
   try {
@@ -586,7 +711,7 @@ const deleteAllMessages = async () => {
     lastMessageCounts.value[selectedTicket.value.id] = 0
     unreadCounts.value[selectedTicket.value.id] = 0
   } catch (err) {
-    alert(err.data?.message || 'Gagal menghapus semua pesan.')
+    notify.error(err.data?.message || 'Gagal menghapus semua pesan.')
   } finally {
     deletingAll.value = false
   }
@@ -792,6 +917,26 @@ onUnmounted(() => {
           <option value="high">High</option>
           <option value="urgent">Urgent</option>
         </select>
+        <button
+          v-if="[1, 2, 3].includes(userRoleId)"
+          type="button"
+          :aria-pressed="overdueOnly"
+          @click="overdueOnly = !overdueOnly; currentPage = 1"
+          class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition"
+          :class="overdueOnly ? 'border-rose-600 bg-rose-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-rose-300 hover:text-rose-700'"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
+          </svg>
+          {{ overdueOnly ? 'Tampilkan Semua' : 'Terlambat SLA' }}
+          <span
+            aria-label="Jumlah tiket melewati SLA"
+            class="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold"
+            :class="overdueOnly ? 'bg-white text-rose-700' : 'bg-rose-100 text-rose-700'"
+          >
+            {{ overdueTicketCount > 99 ? '99+' : overdueTicketCount }}
+          </span>
+        </button>
         <div class="flex items-center gap-2 text-xs text-slate-500">
           <span>Tampilkan:</span>
           <select v-model="perPage" class="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -822,14 +967,13 @@ onUnmounted(() => {
               <th class="px-6 py-4">Waktu & Durasi Penyelesaian</th>
               <th v-if="showPriorityStatus" class="px-6 py-4">Prioritas</th>
               <th v-if="showPriorityStatus" class="px-6 py-4">Status</th>
-              <th class="px-6 py-4">Chat</th>
               <th class="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
           <tbody class="divide-y divide-slate-100">
             <!-- Loading -->
             <tr v-if="pending">
-              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-slate-400">
+              <td :colspan="showPriorityStatus ? 7 : 5" class="px-6 py-12 text-center text-slate-400">
                 <div class="flex items-center justify-center gap-2">
                   <svg class="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
@@ -842,7 +986,7 @@ onUnmounted(() => {
 
             <!-- Error -->
             <tr v-else-if="error">
-              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-rose-500">
+              <td :colspan="showPriorityStatus ? 7 : 5" class="px-6 py-12 text-center text-rose-500">
                 Gagal memuat data tiket aduan.
               </td>
             </tr>
@@ -867,12 +1011,38 @@ onUnmounted(() => {
                   class="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                 />
               </td>
-              <td class="px-6 py-4 font-mono text-xs font-bold text-indigo-600">
-                {{ item.nomor_tiket }}
+              <td class="px-6 py-4">
+                <div class="flex flex-col items-start gap-1.5">
+                  <span class="font-mono text-xs font-bold text-indigo-600">{{ item.nomor_tiket }}</span>
+                  <span
+                    v-if="[1, 2, 3].includes(userRoleId) && hasExceededWarningDeadline(item)"
+                    class="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700"
+                    :title="`Tiket melewati batas penanganan ${warningMaxHours} jam`"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
+                    </svg>
+                    Melewati batas
+                  </span>
+                  <button
+                    v-if="warningMode === 'manual' && [1, 2].includes(userRoleId) && hasExceededWarningDeadline(item)"
+                    type="button"
+                    :disabled="sendingWarningTicketId === item.id"
+                    :title="`Kirim peringatan untuk ${item.nomor_tiket}`"
+                    @click.stop="sendTicketWarning(item)"
+                    class="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-50"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
+                    </svg>
+                    {{ sendingWarningTicketId === item.id ? 'Mengirim...' : 'Peringatkan' }}
+                  </button>
+                </div>
               </td>
               <td class="px-6 py-4">
                 <div class="font-medium text-slate-800">{{ item.judul }}</div>
                 <div class="mt-1 text-xs text-slate-500">Pelapor: {{ item.user?.name || '-' }}</div>
+                <div class="mt-1 text-xs text-slate-500">Unit tujuan: {{ item.category?.department?.nama || item.department?.nama || '-' }}</div>
               </td>
               <td class="px-6 py-4 whitespace-nowrap text-xs text-slate-600">
                 <div>Dibuat: {{ formatDateTime(item.created_at) }}</div>
@@ -904,41 +1074,43 @@ onUnmounted(() => {
                   'bg-rose-100 text-rose-700': Number(item.status_id) === 5
                 }">{{ item.status?.name || '-' }}</span>
               </td>
-              <td class="px-6 py-4">
-                <button 
-                  @click.stop="openDetailModal(item)"
-                  class="relative px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-600 hover:bg-emerald-100 transition inline-flex items-center gap-1"
-                >
-                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                  </svg>
-                  <span>Chat</span>
-
-                  <span 
-                    v-if="unreadCounts[item.id] > 0"
-                    class="absolute -top-1.5 -right-1.5 flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[9px] font-bold text-white shadow-sm animate-bounce"
-                  >
-                    {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
-                  </span>
-                </button>
-              </td>
               <td class="px-6 py-4 text-right">
-                <button
-                  @click.stop="openDetailModal(item)"
-                  class="relative px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition"
-                >
-                  Detail
-                  <span v-if="unreadCounts[item.id] > 0" class="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white shadow-sm">
-                    {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
-                  </span>
-                </button>
+                <div class="flex justify-end gap-2">
+                  <button
+                    type="button"
+                    :aria-label="`Buka chat tiket ${item.nomor_tiket}`"
+                    :title="`Chat tiket ${item.nomor_tiket}`"
+                    @click.stop="openTicketChat(item)"
+                    class="relative inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
+                  >
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+                    </svg>
+                    Chat
+                    <span v-if="unreadCounts[item.id] > 0" class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
+                      {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    :aria-label="`Lihat detail tiket ${item.nomor_tiket}`"
+                    @click.stop="openDetailModal(item)"
+                    class="inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2"
+                  >
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.25 12s3.5-6 9.75-6 9.75 6 9.75 6-3.5 6-9.75 6-9.75-6-9.75-6z" />
+                      <circle cx="12" cy="12" r="2.5" stroke-width="2" />
+                    </svg>
+                    Detail Tiket
+                  </button>
+                </div>
               </td>
             </tr>
 
             <!-- Empty -->
             <tr v-if="!pending && tickets.length === 0">
-              <td :colspan="showPriorityStatus ? 8 : 6" class="px-6 py-12 text-center text-slate-400">
-                Data tiket aduan tidak ditemukan.
+              <td :colspan="showPriorityStatus ? 7 : 5" class="px-6 py-12 text-center text-slate-400">
+                {{ overdueOnly ? 'Tidak ada tiket yang melewati batas penanganan.' : 'Data tiket aduan tidak ditemukan.' }}
               </td>
             </tr>
           </tbody>
@@ -996,6 +1168,13 @@ onUnmounted(() => {
           >
             Ubah Prioritas
           </button>
+          <button
+            v-if="warningMode === 'manual' && [1, 2].includes(userRoleId) && selectedOverdueCount > 0"
+            @click="openBulkModal('send_warning')"
+            class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-medium transition-colors"
+          >
+            Kirim Peringatan
+          </button>
           <button 
             @click="openBulkModal('delete')" 
             class="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-medium transition-colors"
@@ -1017,10 +1196,15 @@ onUnmounted(() => {
           <span v-if="bulkActionType === 'delete'">Hapus Tiket Terpilih</span>
           <span v-else-if="bulkActionType === 'change_status'">Ubah Status Tiket</span>
           <span v-else-if="bulkActionType === 'change_priority'">Ubah Prioritas Tiket</span>
+          <span v-else-if="bulkActionType === 'send_warning'">Kirim Peringatan Tiket</span>
         </h3>
         
         <p class="text-xs text-slate-500 mb-4">
           Tindakan ini akan diterapkan pada <strong class="text-indigo-600">{{ selectedIds.length }} tiket</strong> yang dipilih.
+        </p>
+
+        <p v-if="bulkActionType === 'send_warning'" class="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Peringatan dikirim ke role 3 untuk tiket yang belum selesai. Tiket complete/rejected dilewati.
         </p>
 
         <!-- Dropdown jika Ubah Status -->
@@ -1059,7 +1243,7 @@ onUnmounted(() => {
           </button>
           <button 
             @click="executeBulkAction" 
-            :disabled="submittingBulk || (bulkActionType !== 'delete' && !bulkActionValue)"
+            :disabled="submittingBulk || (['change_status', 'change_priority'].includes(bulkActionType) && !bulkActionValue)"
             class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold"
           >
             {{ submittingBulk ? 'Memproses...' : 'Terapkan' }}
@@ -1090,6 +1274,65 @@ onUnmounted(() => {
             <p class="text-slate-500">Selesai <span class="block mt-1 text-sm font-medium text-slate-800">{{ formatDateTime(detailTicket.terselesaikan_pada) }}</span></p>
           </div>
 
+          <div class="border-t border-slate-100 pt-4">
+            <label v-if="canEditTicketCategory" for="ticket-detail-category" class="block text-xs font-semibold text-slate-700">Kategori Aduan</label>
+            <h3 v-else class="text-xs font-semibold uppercase text-slate-500">Kategori Aduan</h3>
+            <div v-if="canEditTicketCategory" class="mt-2 flex flex-col gap-2 sm:flex-row">
+              <div class="relative min-w-0 flex-1">
+                <button
+                  id="ticket-detail-category"
+                  type="button"
+                  role="combobox"
+                  aria-label="Pilih kategori tiket"
+                  :aria-expanded="isDetailCategoryDropdownOpen"
+                  aria-controls="ticket-detail-category-options"
+                  :disabled="savingTicketDetails"
+                  @click="isDetailCategoryDropdownOpen = !isDetailCategoryDropdownOpen"
+                  class="flex w-full items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm text-slate-800 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-slate-100"
+                >
+                  <span class="min-w-0 truncate">
+                    {{ selectedDetailCategory ? `${selectedDetailCategory.name} · ${selectedDetailCategory.department?.nama || '-'}` : 'Pilih kategori' }}
+                  </span>
+                  <svg class="h-4 w-4 shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m19 9-7 7-7-7" />
+                  </svg>
+                </button>
+                <div v-if="isDetailCategoryDropdownOpen" id="ticket-detail-category-options" class="absolute z-30 mt-1 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg">
+                  <div class="border-b border-slate-100 p-2">
+                    <input
+                      v-model="detailCategorySearch"
+                      type="search"
+                      aria-label="Cari kategori atau unit"
+                      placeholder="Cari kategori atau unit..."
+                      class="w-full rounded-md border border-slate-200 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                      @keydown.esc="isDetailCategoryDropdownOpen = false"
+                    />
+                  </div>
+                  <ul role="listbox" class="max-h-52 overflow-y-auto p-1">
+                    <li v-for="category in filteredDetailCategories" :key="category.id" role="option" :aria-selected="Number(detailCategoryId) === Number(category.id)">
+                      <button
+                        type="button"
+                        class="flex w-full items-start justify-between gap-2 rounded-md px-3 py-2 text-left hover:bg-indigo-50"
+                        :class="Number(detailCategoryId) === Number(category.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'"
+                        @click="selectDetailCategory(category)"
+                      >
+                        <span class="min-w-0 truncate text-xs font-semibold">{{ category.name }}</span>
+                        <span class="shrink-0 text-[10px] text-slate-500">{{ category.department?.nama || '-' }}</span>
+                      </button>
+                    </li>
+                    <li v-if="filteredDetailCategories.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">
+                      Kategori tidak ditemukan.
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+            <p v-else class="mt-1 text-sm font-medium text-slate-800">
+              {{ detailTicket.category?.name || '-' }}
+              <span class="text-slate-500">· {{ detailTicket.category?.department?.nama || detailTicket.department?.nama || '-' }}</span>
+            </p>
+          </div>
+
           <div class="space-y-4 border-t border-slate-100 pt-4">
             <div>
               <h3 class="text-xs font-semibold uppercase text-slate-500">Judul Aduan</h3>
@@ -1118,11 +1361,11 @@ onUnmounted(() => {
                   {{ status.name || '-' }}
                 </option>
               </select>
-              <button @click="updateTicketStatus" :disabled="updatingStatus || !detailStatus" class="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">
-                {{ updatingStatus ? 'Menyimpan...' : 'Simpan Status' }}
+              <button @click="saveTicketDetails" :disabled="savingTicketDetails || !hasTicketDetailChanges" class="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50">
+                {{ savingTicketDetails ? 'Menyimpan...' : 'Simpan Perubahan' }}
               </button>
             </div>
-            <p v-if="detailStatusError" role="alert" class="mt-2 text-xs text-rose-600">{{ detailStatusError }}</p>
+            <p v-if="detailSaveError" role="alert" class="mt-2 text-xs text-rose-600">{{ detailSaveError }}</p>
           </div>
 
           <section class="border-t border-slate-100 pt-4">
@@ -1193,7 +1436,7 @@ onUnmounted(() => {
 
         <footer class="p-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2">
-            <button @click="openEditModal(detailTicket); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100">Edit</button>
+            <!-- <button @click="openEditModal(detailTicket); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100">Edit</button> -->
             <button v-if="canDeleteTicket" @click="handleDelete(detailTicket.id); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-rose-50 text-rose-600 hover:bg-rose-100">Hapus</button>
             <button @click="closeDetailModal" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Tutup</button>
           </div>
@@ -1233,20 +1476,19 @@ onUnmounted(() => {
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
-              <label class="block text-xs font-medium text-slate-700 mb-1">Departemen/Unit Kerja Tujuan :<span class="text-rose-500">*</span></label>
+              <label class="block text-xs font-medium text-slate-700 mb-1">Kategori Aduan:<span class="text-rose-500">*</span></label>
               <select 
-                v-model="form.department_id" 
+                v-model="form.category_id" 
                 required 
                 class="w-full max-w-full truncate px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
               >
                 <option 
-                  v-for="dept in departmentsList" 
-                  :key="dept.kode" 
-                  :value="dept.kode"
-                  :title="dept.deskripsi || 'Tidak ada deskripsi departemen'"
+                  v-for="category in categoriesList" 
+                  :key="category.id" 
+                  :value="category.id"
                   class="truncate max-w-full"
                 >
-                  {{ dept.nama }} ({{ dept.kode }})<span v-if="dept.deskripsi"> - {{ dept.deskripsi }}</span>
+                  {{ category.name }} ({{ category.department?.nama || '-' }})
                 </option>
               </select>
             </div>

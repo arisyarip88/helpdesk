@@ -8,6 +8,7 @@ const isTicketNotificationOpen = ref(false)
 const ticketNotificationStats = ref({ open: 0, complete: 0, rejected: 0 })
 const unreadTicketNotifications = ref({ open: 0, complete: 0, rejected: 0 })
 const departmentStatusNotifications = ref([])
+const departmentTicketWarnings = ref([])
 const previousDepartmentTicketStatuses = ref(null)
 const isFetchingDepartmentStatuses = ref(false)
 const hasLoadedTicketNotificationStats = ref(false)
@@ -18,6 +19,9 @@ const router = useRouter()
 const toggleSidebar = () => {
   isSidebarOpen.value = !isSidebarOpen.value
 }
+//tambahkan menu category
+const isCategoryMenuOpen = ref(route.path.startsWith('/admin/categories'))
+
 
 // State untuk dropdown menu profil
 const isDropdownOpen = ref(false)
@@ -28,6 +32,9 @@ const unreadTicketNotificationTotal = computed(() =>
   unreadTicketNotifications.value.open +
   unreadTicketNotifications.value.complete +
   unreadTicketNotifications.value.rejected
+)
+const roleThreeNotificationTotal = computed(() =>
+  departmentStatusNotifications.value.length + departmentTicketWarnings.value.length
 )
 
 const fetchTicketNotificationStats = async () => {
@@ -64,7 +71,8 @@ const fetchTicketNotificationStats = async () => {
               title: current.title,
               previousStatusName: previous?.statusName || 'Baru',
               statusName: current.statusName,
-              statusId: current.statusId
+              statusId: current.statusId,
+              isNew: !previous
             })
           }
         }
@@ -74,6 +82,14 @@ const fetchTicketNotificationStats = async () => {
       }
 
       previousDepartmentTicketStatuses.value = currentStatuses
+
+      const warningResponse = await $fetch(`${apiBase}/ticket-warnings`, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token.value}`
+        }
+      })
+      departmentTicketWarnings.value = warningResponse.data || []
     } catch (error) {
       console.error('Gagal memeriksa perubahan status departemen:', error)
     } finally {
@@ -117,6 +133,26 @@ const openTicketsByStatus = (statusKey, statusId, search = '') => {
 const openDepartmentStatusNotification = (notification) => {
   departmentStatusNotifications.value = departmentStatusNotifications.value.filter(item => item.id !== notification.id)
   openTicketsByStatus(null, notification.statusId, notification.ticketNumber)
+}
+
+const openDepartmentWarningNotification = async (notification) => {
+  if (notification.warning_id) {
+    try {
+      await $fetch(`${apiBase}/ticket-warnings/${notification.warning_id}/read`, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${token.value}`
+        }
+      })
+    } catch (error) {
+      console.error('Gagal menandai peringatan sebagai dibaca:', error)
+    }
+  }
+
+  departmentTicketWarnings.value = departmentTicketWarnings.value.filter(item => item.id !== notification.id)
+  isTicketNotificationOpen.value = false
+  router.push({ path: '/admin/tickets', query: { search: notification.ticket_number } })
 }
 
 let ticketNotificationInterval = null
@@ -202,8 +238,8 @@ onUnmounted(() => {
           <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 0 1-6 0v-1m6 0H9" />
           </svg>
-          <span v-if="(hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) > 0" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
-            {{ (hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) > 99 ? '99+' : (hasRole(['3']) ? departmentStatusNotifications.length : unreadTicketNotificationTotal) }}
+          <span v-if="(hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) > 0" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+            {{ (hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) > 99 ? '99+' : (hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) }}
           </span>
         </button>
 
@@ -211,9 +247,22 @@ onUnmounted(() => {
           <div v-if="isTicketNotificationOpen" class="absolute right-0 z-50 mt-2 w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
             <div class="border-b border-gray-100 px-4 py-3">
               <p class="text-sm font-bold text-gray-800">Notifikasi Tiket</p>
-              <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Perubahan status tiket departemen Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
+              <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Peringatan penanganan dan perubahan status tiket departemen Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
             </div>
             <div v-if="hasRole(['3'])" class="max-h-80 overflow-y-auto p-2">
+              <button
+                v-for="notification in departmentTicketWarnings"
+                :key="notification.id"
+                @click="openDepartmentWarningNotification(notification)"
+                class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-amber-50"
+              >
+                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.is_overdue ? 'bg-rose-500' : 'bg-amber-500'"></span>
+                <span class="min-w-0 flex-1">
+                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticket_number }} · {{ notification.is_overdue ? 'Melewati batas waktu' : 'Peringatan tiket' }}</span>
+                  <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
+                  <span class="mt-0.5 block text-[10px] text-gray-500">{{ notification.message }}</span>
+                </span>
+              </button>
               <button
                 v-for="notification in departmentStatusNotifications"
                 :key="notification.id"
@@ -222,12 +271,12 @@ onUnmounted(() => {
               >
                 <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.statusId === 4 ? 'bg-emerald-500' : notification.statusId === 5 ? 'bg-rose-500' : 'bg-indigo-500'"></span>
                 <span class="min-w-0 flex-1">
-                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticketNumber }} · {{ notification.statusName }}</span>
+                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticketNumber }} · {{ notification.isNew && notification.statusId === 1 ? 'Tiket baru' : notification.statusName }}</span>
                   <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
                   <span class="mt-0.5 block text-[10px] text-gray-400">{{ notification.previousStatusName }} → {{ notification.statusName }}</span>
                 </span>
               </button>
-              <p v-if="departmentStatusNotifications.length === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada perubahan status baru.</p>
+              <p v-if="roleThreeNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada peringatan atau perubahan status baru.</p>
             </div>
             <div v-else class="p-2">
               <button v-if="unreadTicketNotifications.open > 0" @click="openTicketsByStatus('open', 1)" class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50">
@@ -378,7 +427,18 @@ onUnmounted(() => {
             <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5m0 0h4m-4 0V11m0 0h4m-4 0H9m4 0V5" />
             </svg>
-            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Department</span>
+            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Unit Kerja</span>
+          </NuxtLink>
+          <!-- 3.5. Category -->
+          <NuxtLink v-if="hasRole(['1','2'])"
+            to="/admin/categories" 
+            class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
+            active-class="bg-blue-600 text-white hover:bg-blue-600"
+          >
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Kategori</span>
           </NuxtLink>
 
           <!-- 4. Ticket Management -->
@@ -391,6 +451,18 @@ onUnmounted(() => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 011 1.732 2 2 0 01-1 1.732v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 01-1-1.732 2 2 0 011-1.732V7a2 2 0 00-2-2H5z" />
             </svg>
             <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Ticket Management</span>
+          </NuxtLink>
+
+          <NuxtLink
+            v-if="hasRole(['1','2'])"
+            to="/admin/settings/handling-time"
+            class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
+            active-class="bg-blue-600 text-white hover:bg-blue-600"
+          >
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 2m6-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Batas Waktu Penanganan</span>
           </NuxtLink>
 
           <!-- 5. Knowledge Base -->

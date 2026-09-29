@@ -1,18 +1,17 @@
 <?php
 
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\AuthController;
-use App\Http\Controllers\Api\DepartmentController;
-use App\Http\Controllers\Api\UserController;
-use App\Http\Controllers\Api\TicketController;
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DashboardController;
-
-use App\Http\Controllers\Api\LoginController;
-use App\Http\Controllers\Api\TicketMessageController;
+use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\KnowledgeBaseController;
-use App\Http\Controllers\Api\TicketAnalyticsController;
 use App\Http\Controllers\Api\ReportController;
+use App\Http\Controllers\Api\TicketAlertController;
+use App\Http\Controllers\Api\TicketAnalyticsController;
+use App\Http\Controllers\Api\TicketController;
+use App\Http\Controllers\Api\TicketMessageController;
+use App\Http\Controllers\Api\UserController;
+use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
@@ -30,14 +29,26 @@ Route::post('/chatbot/ask', [KnowledgeBaseController::class, 'searchAnswer'])->m
 
 // Protected Routes (Sanctum Authenticated)
 Route::middleware('auth:sanctum')->group(function () {
-    
+
     // Auth & Profile Routes
     Route::get('/profile', [AuthController::class, 'profile']);
     Route::put('/profile', [UserController::class, 'updateID']);
-    Route::get('/me', [AuthController::class, 'me']);    
+    Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/tickets/stats', [TicketController::class, 'stats']);
-  
+
+    Route::middleware('role:1,2')->group(function () {
+        Route::get('/ticket-handling-settings', [TicketAlertController::class, 'settings']);
+        Route::put('/ticket-handling-settings', [TicketAlertController::class, 'updateSettings']);
+        Route::post('/tickets/{ticket}/warnings', [TicketAlertController::class, 'sendWarning']);
+        Route::apiResource('/categories', CategoryController::class);
+
+    });
+
+    Route::middleware('role:3')->group(function () {
+        Route::get('/ticket-warnings', [TicketAlertController::class, 'notifications']);
+        Route::post('/ticket-warnings/{warning}/read', [TicketAlertController::class, 'markRead']);
+    });
 
     // Dashboard untuk admin utama dan admin departemen.
     Route::middleware('role:1,2,3')->get('/dashboard', [DashboardController::class, 'index']);
@@ -60,10 +71,10 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tickets/export/excel', [TicketController::class, 'exportExcel']);
         Route::apiResource('tickets', TicketController::class);
 
-              // Ticket Messages / Chat
+        // Ticket Messages / Chat
         Route::get('/tickets/{ticket}/messages', [TicketMessageController::class, 'index']);
         Route::post('/tickets/{ticket}/messages', [TicketMessageController::class, 'store']);
-       // 1. Route Hapus SELURUH Pesan pada Tiket
+        // 1. Route Hapus SELURUH Pesan pada Tiket
         Route::delete('/tickets/{ticket}/messages', [TicketMessageController::class, 'destroyAll']);
         // 2. Route Hapus SATU Pesan Spesifik
         Route::delete('/tickets/{ticket}/messages/{message}', [TicketMessageController::class, 'destroy']);
@@ -72,13 +83,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::middleware('role:4')->post('/tickets/{id}/rating', [TicketController::class, 'rate']);
 
     Route::middleware('role:1,2,3')->prefix('analytics')->group(function () {
-    Route::get('/departments', [TicketAnalyticsController::class, 'getDepartments']);
-    Route::get('/ticket-status', [TicketAnalyticsController::class, 'getStatusStats']);
-    Route::get('/department-tickets', [TicketAnalyticsController::class, 'getDepartmentTickets']);
-    Route::get('/resolution-time', [TicketAnalyticsController::class, 'getResolutionTime']);
-    Route::get('/summary', [TicketAnalyticsController::class, 'getSummary']);
-    Route::get('/priority_recent', [TicketAnalyticsController::class, 'getPriorityAndRecent']);
-    Route::get('/rating-ranking', [TicketAnalyticsController::class, 'getRatingRanking']);
+        Route::get('/departments', [TicketAnalyticsController::class, 'getDepartments']);
+        Route::get('/ticket-status', [TicketAnalyticsController::class, 'getStatusStats']);
+        Route::get('/department-tickets', [TicketAnalyticsController::class, 'getDepartmentTickets']);
+        Route::get('/resolution-time', [TicketAnalyticsController::class, 'getResolutionTime']);
+        Route::get('/summary', [TicketAnalyticsController::class, 'getSummary']);
+        Route::get('/priority_recent', [TicketAnalyticsController::class, 'getPriorityAndRecent']);
+        Route::get('/rating-ranking', [TicketAnalyticsController::class, 'getRatingRanking']);
+        Route::get('/category-frequency', [TicketAnalyticsController::class, 'getCategoryFrequency']);
     });
 
     Route::middleware('role:1,2,3')->prefix('reports')->group(function () {
@@ -87,7 +99,6 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/export/{type}', [ReportController::class, 'export']);
     });
 
-    Route::post('/tickets/bulk-action', [TicketController::class, 'bulkAction']);
+    Route::middleware('role:1,2')->post('/tickets/bulk-action', [TicketController::class, 'bulkAction']);
 
-   
 });

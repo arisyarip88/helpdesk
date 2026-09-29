@@ -8,6 +8,7 @@ definePageMeta({
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 const { token } = useAuth()
+const notify = useNotify()
 
 const currentPage = ref(1)
 const searchQuery = ref('')
@@ -109,15 +110,16 @@ const createKnowledge = async () => {
 }
 
 const deleteQuestion = async (item) => {
-  if (!confirm('Hapus pertanyaan belum terjawab ini?')) return
+  if (!(await notify.confirm({ title: 'Hapus Pertanyaan', message: 'Hapus pertanyaan belum terjawab ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
   try {
     await $fetch(`${apiBase}/knowledge-base/unanswered/${item.id}`, {
       method: 'DELETE',
       headers: getAuthHeaders()
     })
     await refresh()
+    notify.success('Pertanyaan berhasil dihapus.')
   } catch (err) {
-    alert(err.data?.message || 'Gagal menghapus pertanyaan.')
+    notify.error(err.data?.message || 'Gagal menghapus pertanyaan.')
   }
 }
 </script>

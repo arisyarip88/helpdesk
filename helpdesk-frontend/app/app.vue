@@ -10,5 +10,6 @@
     />
       <NuxtPage />
     </NuxtLayout>
+    <AppNotifications />
   </div>
 </template>

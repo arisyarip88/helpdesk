@@ -139,8 +139,26 @@ const handleSearch = () => {
 // Computed Data List
 const tickets = computed(() => responseData.value?.data?.data || responseData.value?.data || [])
 const departmentsList = computed(() => responseData.value?.departments || [])
+const categoriesList = computed(() => responseData.value?.categories || [])
 const assigneesList = computed(() => responseData.value?.assignees || [])
 const statusesList = computed(() => responseData.value?.statuses || [])
+const categorySearch = ref('')
+const isCategoryDropdownOpen = ref(false)
+const selectedCategory = computed(() => categoriesList.value.find(category => Number(category.id) === Number(form.value.category_id)))
+const filteredCategories = computed(() => {
+  const search = categorySearch.value.trim().toLocaleLowerCase()
+  if (!search) return categoriesList.value
+
+  return categoriesList.value.filter(category =>
+    `${category.name} ${category.department?.nama || ''}`.toLocaleLowerCase().includes(search)
+  )
+})
+
+const selectCategory = (category) => {
+  form.value.category_id = category.id
+  categorySearch.value = ''
+  isCategoryDropdownOpen.value = false
+}
 
 const pagination = computed(() => {
   const meta = responseData.value?.data || responseData.value?.meta || responseData.value || {}
@@ -163,7 +181,7 @@ const imagePreviewUrl = ref('')
 
 const form = ref({
   id: null,
-  department_id: '',
+  category_id: '',
   judul: '',
   deskripsi: '',
   prioritas: 'medium',
@@ -215,7 +233,7 @@ const openCreateModal = () => {
   formError.value = ''
   form.value = {
     id: null,
-    department_id: departmentsList.value[0]?.kode || departmentsList.value[0]?.id || '',
+    category_id: categoriesList.value[0]?.id || '',
     judul: '',
     deskripsi: '',
     prioritas: 'medium',
@@ -224,6 +242,8 @@ const openCreateModal = () => {
     lampiran: null,
     existing_lampiran: null
   }
+  categorySearch.value = ''
+  isCategoryDropdownOpen.value = false
   imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
@@ -234,7 +254,7 @@ const openEditModal = (item) => {
   formError.value = ''
   form.value = {
     id: item.id,
-    department_id: item.department_id || '',
+    category_id: item.category_id || item.category?.id || '',
     judul: item.judul || '',
     deskripsi: item.deskripsi || '',
     prioritas: item.prioritas || 'medium',
@@ -243,6 +263,8 @@ const openEditModal = (item) => {
     lampiran: null,
     existing_lampiran: item.lampiran || null
   }
+  categorySearch.value = ''
+  isCategoryDropdownOpen.value = false
   imagePreviewUrl.value = ''
   if (fileInputRef.value) fileInputRef.value.value = ''
   isModalOpen.value = true
@@ -254,13 +276,18 @@ const closeModal = () => {
 
 // SUBMIT FORM (CREATE & UPDATE)
 const handleSubmit = async () => {
-  submitting.value = true
   formError.value = ''
+  if (!form.value.category_id) {
+    formError.value = 'Pilih kategori aduan.'
+    return
+  }
+
+  submitting.value = true
 
   const formData = new FormData()
   // Perbaikan: Menggunakan userId.value yang valid
   formData.append('user_id', userId.value || '')
-  formData.append('department_id', form.value.department_id)
+  formData.append('category_id', form.value.category_id)
   formData.append('status_id', form.value.status_id || 1)
   formData.append('judul', form.value.judul)
   formData.append('deskripsi', form.value.deskripsi)
@@ -388,10 +415,19 @@ const globalLoadingMessage = computed(() => {
 
 const unreadCounts = ref({})
 const lastMessageCounts = ref({})
+const latestAdminMessages = ref({})
+const adminRoleIds = new Set([1, 2, 3])
 
 let chatInterval = null
 let globalPollInterval = null
 let ticketStatusRefreshInterval = null
+
+const updateLatestAdminMessage = (ticketId, messages) => {
+  const latestMessage = [...messages].reverse().find(message =>
+    adminRoleIds.has(Number(message.user?.role_id))
+  )
+  latestAdminMessages.value[ticketId] = latestMessage?.message || ''
+}
 
 const playNotificationSound = () => {
   try {
@@ -487,6 +523,7 @@ const fetchMessages = async (silent = false) => {
 
     chatMessages.value = fetched
     lastMessageCounts.value[selectedTicket.value.id] = fetched.length
+    updateLatestAdminMessage(selectedTicket.value.id, fetched)
   } catch (err) {
     console.error('Gagal mengambil pesan:', err)
   } finally {
@@ -572,6 +609,7 @@ const checkGlobalUnreadMessages = async () => {
       const messages = res.data || res || []
       const currentCount = messages.length
       const prevCount = lastMessageCounts.value[ticket.id]
+      updateLatestAdminMessage(ticket.id, messages)
 
       if (prevCount !== undefined && currentCount > prevCount) {
         const diff = currentCount - prevCount
@@ -587,6 +625,7 @@ const checkGlobalUnreadMessages = async () => {
 }
 
 onMounted(() => {
+  void checkGlobalUnreadMessages()
   globalPollInterval = setInterval(() => {
     checkGlobalUnreadMessages()
   }, 7000)
@@ -907,7 +946,7 @@ const toggleStatusFilter = (statusId) => {
               <svg class="w-3.5 h-3.5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
-              <span class="truncate max-w-md italic">{{ item.comment ? item.comment : 'Belum ada balasan' }}</span>
+              <span class="truncate max-w-md italic">{{ latestAdminMessages[item.id] || 'Belum ada balasan' }}</span>
             </div>
 
             <!-- Metadata Info -->
@@ -1094,38 +1133,62 @@ const toggleStatusFilter = (statusId) => {
           </div>
 
           <!-- Grid Sub-Row untuk Tujuan & Prioritas -->
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <!-- Tujuan Departemen -->
+          <div class="space-y-4">
+            <!-- Kategori Aduan -->
             <div>
               <label class="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                Unit Tujuan <span class="text-rose-500">*</span>
+                Kategori Aduan <span class="text-rose-500">*</span>
               </label>
               <div class="relative">
-                <select 
-                  v-model="form.department_id" 
-                  required 
-                  class="w-full appearance-none px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 focus:bg-white transition cursor-pointer"
+                <button
+                  type="button"
+                  role="combobox"
+                  aria-label="Pilih kategori aduan"
+                  :aria-expanded="isCategoryDropdownOpen"
+                  aria-controls="ticket-category-options"
+                  @click="isCategoryDropdownOpen = !isCategoryDropdownOpen"
+                  class="flex w-full items-center justify-between gap-3 rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2.5 text-left text-xs text-slate-800 transition hover:bg-white focus:border-indigo-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500/20 sm:text-sm"
                 >
-                  <option value="" disabled selected>Pilih Unit</option>
-                  <option
-                    v-for="dept in departmentsList"
-                    :key="dept.kode"
-                    :value="dept.kode"
-                    :title="dept.deskripsi || 'Tidak ada deskripsi departemen'"
-                  >
-                    {{ dept.nama }}
-                  </option>
-                </select>
-                <div class="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <span class="min-w-0 truncate">
+                    {{ selectedCategory ? `${selectedCategory.name} · ${selectedCategory.department?.nama || 'Tanpa unit'}` : 'Pilih kategori aduan' }}
+                  </span>
+                  <svg class="h-4 w-4 shrink-0 text-slate-400 transition" :class="isCategoryDropdownOpen ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
                   </svg>
+                </button>
+                <div v-if="isCategoryDropdownOpen" id="ticket-category-options" class="absolute z-20 mt-1 w-full overflow-hidden rounded-xl border border-slate-200 bg-white shadow-lg">
+                  <div class="border-b border-slate-100 p-2">
+                    <input
+                      v-model="categorySearch"
+                      type="search"
+                      aria-label="Cari kategori atau unit"
+                      placeholder="Cari kategori atau unit..."
+                      class="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20"
+                      @keydown.esc="isCategoryDropdownOpen = false"
+                    />
+                  </div>
+                  <ul role="listbox" class="max-h-52 overflow-y-auto p-1">
+                    <li v-for="category in filteredCategories" :key="category.id" role="option" :aria-selected="Number(form.category_id) === Number(category.id)">
+                      <button
+                        type="button"
+                        class="flex w-full items-start justify-between gap-2 rounded-lg px-3 py-2 text-left hover:bg-indigo-50"
+                        :class="Number(form.category_id) === Number(category.id) ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'"
+                        @click="selectCategory(category)"
+                      >
+                        <span class="min-w-0 truncate text-xs font-semibold">{{ category.name }}</span>
+                        <span class="shrink-0 text-[10px] text-slate-500">{{ category.department?.nama || '-' }}</span>
+                      </button>
+                    </li>
+                    <li v-if="filteredCategories.length === 0" class="px-3 py-4 text-center text-xs text-slate-400">
+                      Kategori tidak ditemukan.
+                    </li>
+                  </ul>
                 </div>
               </div>
             </div>
 
             <!-- Tingkat Prioritas -->
-            <div>
+            <!-- <div>
               <label class="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
                 Prioritas <span class="text-rose-500">*</span>
               </label>
@@ -1146,7 +1209,7 @@ const toggleStatusFilter = (statusId) => {
                   </svg>
                 </div>
               </div>
-            </div>
+            </div> -->
           </div>
 
           <!-- Status Tiket (Hanya saat mode Edit) -->

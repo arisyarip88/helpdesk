@@ -20,8 +20,10 @@ class Department extends Model
     /**
      * Relasi One-to-Many ke model Ticket
      */
-    public function tickets()
+
+    // relasi dengan category
+    public function categories()
     {
-        return $this->hasMany(Ticket::class, 'department_id', 'kode');
+        return $this->hasMany(Category::class, 'department_id', 'kode');
     }
 }

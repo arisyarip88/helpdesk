@@ -9,6 +9,7 @@ definePageMeta({
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 const { token } = useAuth()
+const notify = useNotify()
 
 // State Search, Pagination & Per Page Limit
 const currentPage = ref(1)
@@ -208,7 +209,7 @@ const handleSubmit = async () => {
 
 // Delete Handler
 const handleDelete = async (id) => {
-  if (!confirm('Apakah Anda yakin ingin menghapus data ini?')) return
+  if (!(await notify.confirm({ title: 'Hapus Knowledge Base', message: 'Apakah Anda yakin ingin menghapus data ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
 
   try {
     await $fetch(`${apiBase}/knowledge-base/${id}`, {
@@ -219,8 +220,9 @@ const handleDelete = async (id) => {
       }
     })
     refresh()
+    notify.success('Data berhasil dihapus.')
   } catch (err) {
-    alert('Gagal menghapus data')
+    notify.error('Gagal menghapus data')
   }
 }
 </script>

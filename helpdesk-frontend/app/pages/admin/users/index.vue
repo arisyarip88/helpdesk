@@ -11,6 +11,7 @@ const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 
 // Ambil Token dari Auth State
 const { token } = useAuth()
+const notify = useNotify()
 
 // Helper Header Authentication
 const getAuthHeaders = () => ({
@@ -168,16 +169,17 @@ const handleSubmit = async () => {
 
 // CRUD: Delete
 const handleDelete = async (id) => {
-  if (confirm('Apakah Anda yakin ingin menghapus user ini?')) {
-    try {
-      await $fetch(`${apiBase}/users/${id}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      })
-      await refresh()
-    } catch (err) {
-      alert(err.data?.message || 'Gagal menghapus user.')
-    }
+  if (!(await notify.confirm({ title: 'Hapus User', message: 'Apakah Anda yakin ingin menghapus user ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
+
+  try {
+    await $fetch(`${apiBase}/users/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    })
+    await refresh()
+    notify.success('User berhasil dihapus.')
+  } catch (err) {
+    notify.error(err.data?.message || 'Gagal menghapus user.')
   }
 }
 </script>
@@ -188,7 +190,7 @@ const handleDelete = async (id) => {
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
       <div>
         <h1 class="text-2xl font-bold text-slate-800">Manajemen Users</h1>
-        <p class="text-sm text-slate-500">Kelola pengguna, hak akses role, dan departemen.</p>
+        <p class="text-sm text-slate-500">Kelola pengguna, hak akses role, dan unit.</p>
       </div>
       <button 
         @click="openCreateModal"
@@ -237,7 +239,7 @@ const handleDelete = async (id) => {
               <th class="px-6 py-4">Nama User</th>
               <th class="px-6 py-4">Kontak</th>
               <th class="px-6 py-4">Role</th>
-              <th class="px-6 py-4">Departemen</th>
+              <th class="px-6 py-4">Unit</th>
               <th class="px-6 py-4 text-right">Aksi</th>
             </tr>
           </thead>
@@ -420,7 +422,7 @@ const handleDelete = async (id) => {
             </div>
 
             <div>
-              <label class="block text-xs font-medium text-slate-700 mb-1">Departemen <span class="text-rose-500">*</span></label>
+              <label class="block text-xs font-medium text-slate-700 mb-1">Unit <span class="text-rose-500">*</span></label>
               <select 
                 v-model="form.department_id" 
                 required 

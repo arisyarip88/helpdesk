@@ -11,6 +11,7 @@ const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 
 // Ambil Token dari Cookie/Auth State
 const { token } = useAuth()
+const notify = useNotify()
 
 // Helper function untuk Header
 const getAuthHeaders = () => ({
@@ -144,16 +145,17 @@ const handleSubmit = async () => {
 
 // CRUD: Delete (Menggunakan kode)
 const handleDelete = async (kode) => {
-  if (confirm(`Apakah Anda yakin ingin menghapus departemen ${kode}?`)) {
-    try {
-      await $fetch(`${apiBase}/departments/${kode}`, {
-        method: 'DELETE',
-        headers: getAuthHeaders()
-      })
-      await refresh()
-    } catch (err) {
-      alert(err.data?.message || 'Gagal menghapus departemen.')
-    }
+  if (!(await notify.confirm({ title: 'Hapus Departemen', message: `Apakah Anda yakin ingin menghapus departemen ${kode}?`, confirmText: 'Ya, Hapus', variant: 'danger' }))) return
+
+  try {
+    await $fetch(`${apiBase}/departments/${kode}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    })
+    await refresh()
+    notify.success('Departemen berhasil dihapus.')
+  } catch (err) {
+    notify.error(err.data?.message || 'Gagal menghapus departemen.')
   }
 }
 </script>
@@ -163,8 +165,8 @@ const handleDelete = async (kode) => {
     <!-- Header -->
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
       <div>
-        <h1 class="text-2xl font-bold text-slate-800">Manajemen Departemen</h1>
-        <p class="text-sm text-slate-500">Kelola daftar divisi dan ketua departemen perusahaan.</p>
+        <h1 class="text-2xl font-bold text-slate-800">Manajemen Unit Kerja</h1>
+        <p class="text-sm text-slate-500">Kelola daftar divisi dan ketua Unit Kerja.</p>
       </div>
       <button 
         @click="openCreateModal"
@@ -173,7 +175,7 @@ const handleDelete = async (kode) => {
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
         </svg>
-        Tambah Departemen
+        Tambah Unit
       </button>
     </div>
 
@@ -187,7 +189,7 @@ const handleDelete = async (kode) => {
           v-model="searchQuery" 
           @input="handleSearch"
           type="text" 
-          placeholder="Cari kode, nama departemen, atau ketua..." 
+          placeholder="Cari kode, nama Uit, atau ketua..." 
           class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition"
         />
       </div>
@@ -211,8 +213,8 @@ const handleDelete = async (kode) => {
             <tr>
               <th class="px-6 py-4">No</th>
               <th class="px-6 py-4">Kode</th>
-              <th class="px-6 py-4">Nama Departemen</th>
-              <th class="px-6 py-4">Ketua Departemen</th>
+              <th class="px-6 py-4">Nama Unit</th>
+              <th class="px-6 py-4">Ketua Unit</th>
               <th class="px-6 py-4">Deskripsi</th>
               <th class="px-6 py-4 text-right">Aksi</th>
             </tr>
@@ -226,7 +228,7 @@ const handleDelete = async (kode) => {
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  <span>Memuat data departemen...</span>
+                  <span>Memuat data Unit...</span>
                 </div>
               </td>
             </tr>
@@ -274,7 +276,7 @@ const handleDelete = async (kode) => {
             <!-- Empty State -->
             <tr v-if="!pending && departments.length === 0">
               <td colspan="6" class="px-6 py-12 text-center text-slate-400">
-                Departemen tidak ditemukan.
+                Unit tidak ditemukan.
               </td>
             </tr>
           </tbody>
@@ -328,7 +330,7 @@ const handleDelete = async (kode) => {
         <form @submit.prevent="handleSubmit" class="space-y-4">
           <div>
             <label class="block text-xs font-medium text-slate-700 mb-1">
-              Kode Departemen <span class="text-rose-500">*</span>
+              Kode Unit <span class="text-rose-500">*</span>
             </label>
             <input 
               v-model="form.kode" 
@@ -341,7 +343,7 @@ const handleDelete = async (kode) => {
           </div>
 
           <div>
-            <label class="block text-xs font-medium text-slate-700 mb-1">Nama Departemen <span class="text-rose-500">*</span></label>
+            <label class="block text-xs font-medium text-slate-700 mb-1">Nama Unit <span class="text-rose-500">*</span></label>
             <input 
               v-model="form.nama" 
               type="text" 
@@ -352,7 +354,7 @@ const handleDelete = async (kode) => {
           </div>
 
           <div>
-            <label class="block text-xs font-medium text-slate-700 mb-1">Ketua Departemen</label>
+            <label class="block text-xs font-medium text-slate-700 mb-1">Ketua Unit</label>
             <input 
               v-model="form.ketua" 
               type="text" 
@@ -366,7 +368,7 @@ const handleDelete = async (kode) => {
             <textarea 
               v-model="form.deskripsi" 
               rows="3" 
-              placeholder="Penjelasan tugas departemen..." 
+              placeholder="Penjelasan tugas Unit..." 
               class="w-full px-3.5 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             ></textarea>
           </div>

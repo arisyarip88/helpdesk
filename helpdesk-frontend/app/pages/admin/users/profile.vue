@@ -185,7 +185,7 @@ const payload = {
           <div class="space-y-4">
             <div class="border-b border-slate-100 pb-3">
               <h2 class="text-base font-bold text-slate-800">Informasi Pengguna</h2>
-              <p class="text-xs text-slate-400">Detail identitas, hak akses role, dan instansi departemen.</p>
+              <p class="text-xs text-slate-400">Detail identitas, hak akses role, dan instansi unit.</p>
             </div>
 
             <!-- Nama Lengkap & Username (2 Grid Row) -->
@@ -266,7 +266,7 @@ const payload = {
 
               <div>
                 <label class="block text-xs font-medium text-slate-500 mb-1">
-                  Departemen <span class="text-slate-400">(Terkunci)</span>
+                  Unit <span class="text-slate-400">(Terkunci)</span>
                 </label>
                 <select 
                   v-model="form.department_id" 

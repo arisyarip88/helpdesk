@@ -12,8 +12,9 @@ class TicketMessageController extends Controller
     public function index(Request $request, Ticket $ticket)
     {
         $messages = $ticket->messages()
-            ->with('user:id,name,username')
+            ->with('user:id,name,username,role_id')
             ->orderBy('created_at', 'asc')
+            ->orderBy('id', 'asc')
             ->get();
 
         return response()->json([

@@ -82,7 +82,7 @@ const config = useRuntimeConfig()
 const apiBaseUrl = config.public.apiBase || 'http://localhost:8000/api'
 const router = useRouter()
 
-const { token } = useAuth()
+const { token, hasRole } = useAuth()
 
 const departments = ref([{ kode: 'all', nama: 'Semua Departemen' }])
 const selectedStatusDept = ref('all')
@@ -100,7 +100,7 @@ const loadingStatus = ref(true)
 const loadingDeptTickets = ref(true)
 const loadingResolution = ref(true)
 const loadingRatingRanking = ref(true)
-const ratingRanking = ref({ departments: [], users: [] })
+const ratingRanking = ref({ departments: [], users: [], fastest_departments: [] })
 
 const fetchRatingRanking = async () => {
   loadingRatingRanking.value = true
@@ -580,7 +580,7 @@ const printDashboard = () => {
       </div>
 
       <!-- Peringkat Rating Pelayanan -->
-      <section class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      <section class="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
           <header class="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
             <h3 class="text-sm font-bold text-slate-900 dark:text-white">Peringkat Rating Departemen</h3>
@@ -603,6 +603,30 @@ const printDashboard = () => {
             </li>
           </ol>
           <p v-else class="p-8 text-center text-xs text-slate-400">Belum ada rating pada tiket Close.</p>
+        </div>
+
+        <div v-if="hasRole(['1','2'])" class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+          <header class="border-b border-slate-100 px-5 py-4 dark:border-slate-800">
+            <h3 class="text-sm font-bold text-slate-900 dark:text-white">Peringkat Rating Petugas</h3>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rata-rata rating petugas role 3 yang menyelesaikan tiket</p>
+          </header>
+          <div v-if="loadingRatingRanking" class="p-8 text-center text-xs text-slate-400">Memuat peringkat...</div>
+          <ol v-else-if="ratingRanking.users?.length" class="divide-y divide-slate-100 dark:divide-slate-800">
+            <li v-for="(item, index) in ratingRanking.users" :key="item.user_id" class="flex items-center justify-between gap-3 px-4 py-3">
+              <div class="flex min-w-0 items-center gap-2.5">
+                <span class="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-xs font-bold text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300">{{ index + 1 }}</span>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold text-slate-800 dark:text-slate-100">{{ item.user_name }}</p>
+                  <p class="truncate text-[11px] text-slate-500">{{ item.department_name || 'Tanpa departemen' }} · {{ item.rating_count }} tiket</p>
+                </div>
+              </div>
+              <div class="shrink-0 text-right" :aria-label="`Rating rata-rata ${Number(item.average_rating).toFixed(1)} dari 5`">
+                <p class="text-xs text-amber-500" aria-hidden="true">★★★★★</p>
+                <p class="text-sm font-bold text-slate-800 dark:text-slate-100">{{ Number(item.average_rating).toFixed(1) }}<span class="text-xs font-medium text-slate-400"> / 5</span></p>
+              </div>
+            </li>
+          </ol>
+          <p v-else class="p-8 text-center text-xs text-slate-400">Belum ada rating untuk petugas pada periode ini.</p>
         </div>
 
         <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">

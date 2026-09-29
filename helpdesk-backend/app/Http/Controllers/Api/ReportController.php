@@ -2,14 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Exports\TicketsExport;
+use App\Exports\ReportExport;
 use App\Http\Controllers\Controller;
+use App\Http\Controllers\Api\TicketAnalyticsController;
 use App\Models\Department;
 use App\Models\Ticket;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
-use Illuminate\Validation\ValidationException;
 use Maatwebsite\Excel\Facades\Excel;
 
 class ReportController extends Controller
@@ -38,14 +38,14 @@ class ReportController extends Controller
     public function export(Request $request, string $type)
     {
         $this->validatePeriod($request);
-        $tickets = $this->reportQuery($request)->get();
+        $report = $this->analyticsData($request);
 
         if ($type === 'excel') {
-            return Excel::download(new TicketsExport($tickets), 'laporan-tiket.xlsx');
+            return Excel::download(new ReportExport($report), 'laporan-tiket.xlsx');
         }
 
         if ($type === 'pdf') {
-            return Pdf::loadView('exports.tickets-pdf', compact('tickets'))
+            return Pdf::loadView('exports.report-pdf', $report)
                 ->download('laporan-tiket.pdf');
         }
 
@@ -54,44 +54,37 @@ class ReportController extends Controller
 
     private function reportQuery(Request $request)
     {
-        $query = Ticket::with(['user', 'department', 'status']);
+        $query = Ticket::with(['user', 'category.department', 'status']);
 
         if ($request->user()?->role_id == 3) {
-            $query->where('department_id', $request->user()->department_id);
+            $query->whereHas('category', fn ($category) => $category->where('department_id', $request->user()->department_id));
         }
 
         return $query
-            ->when($request->filled('department_id'), fn ($query) =>
-                $query->where('department_id', $request->input('department_id'))
+            ->when($request->filled('department_id'), fn ($query) => $query->whereHas('category', fn ($category) => $category->where('department_id', $request->input('department_id')))
             )
-            ->when($request->filled('status_id'), fn ($query) =>
-                $query->where('status_id', $request->input('status_id'))
+            ->when($request->filled('status_id'), fn ($query) => $query->where('status_id', $request->input('status_id'))
             )
-            ->when($request->filled('status'), fn ($query) =>
-                $query->whereHas('status', function ($status) use ($request) {
-                    $value = $request->input('status');
+            ->when($request->filled('status'), fn ($query) => $query->whereHas('status', function ($status) use ($request) {
+                $value = $request->input('status');
 
-                    if (is_numeric($value)) {
-                        $status->where('id', $value);
-                    } else {
-                        $status->whereRaw("LOWER(REPLACE(name, ' ', '_')) = ?", [strtolower($value)]);
-                    }
-                })
+                if (is_numeric($value)) {
+                    $status->where('id', $value);
+                } else {
+                    $status->whereRaw("LOWER(REPLACE(name, ' ', '_')) = ?", [strtolower($value)]);
+                }
+            })
             )
-            ->when($request->filled('prioritas'), fn ($query) =>
-                $query->where('prioritas', $request->input('prioritas'))
+            ->when($request->filled('prioritas'), fn ($query) => $query->where('prioritas', $request->input('prioritas'))
             )
-            ->when($request->filled('month'), fn ($query) =>
-                $query->whereBetween('created_at', [
-                    Carbon::createFromFormat('Y-m', $request->input('month'))->startOfMonth(),
-                    Carbon::createFromFormat('Y-m', $request->input('month'))->endOfMonth(),
-                ])
+            ->when($request->filled('month'), fn ($query) => $query->whereBetween('created_at', [
+                Carbon::createFromFormat('Y-m', $request->input('month'))->startOfMonth(),
+                Carbon::createFromFormat('Y-m', $request->input('month'))->endOfMonth(),
+            ])
             )
-            ->when($request->filled('start_date'), fn ($query) =>
-                $query->whereDate('created_at', '>=', $request->input('start_date'))
+            ->when($request->filled('start_date'), fn ($query) => $query->whereDate('created_at', '>=', $request->input('start_date'))
             )
-            ->when($request->filled('end_date'), fn ($query) =>
-                $query->whereDate('created_at', '<=', $request->input('end_date'))
+            ->when($request->filled('end_date'), fn ($query) => $query->whereDate('created_at', '<=', $request->input('end_date'))
             )
             ->latest('created_at');
     }
@@ -99,9 +92,8 @@ class ReportController extends Controller
     private function validatePeriod(Request $request): void
     {
         $request->validate([
-            'month' => ['nullable', 'date_format:Y-m'],
-            'start_date' => ['nullable', 'date'],
-            'end_date' => ['nullable', 'date', 'after_or_equal:start_date'],
+            'month' => ['nullable', 'integer', 'between:1,12'],
+            'year' => ['nullable', 'integer', 'between:2000,2100'],
             'department_id' => ['nullable'],
             'status' => ['nullable', 'string'],
             'status_id' => ['nullable', 'integer'],
@@ -109,10 +101,15 @@ class ReportController extends Controller
             'per_page' => ['nullable', 'integer', 'min:1', 'max:100'],
         ]);
 
-        if ($request->filled('month') && ($request->filled('start_date') || $request->filled('end_date'))) {
-            throw ValidationException::withMessages([
-                'month' => 'Gunakan bulan atau rentang tanggal, bukan keduanya sekaligus.',
-            ]);
-        }
+    }
+
+    private function analyticsData(Request $request): array
+    {
+        $analytics = app(TicketAnalyticsController::class);
+        $summary = $analytics->getSummary($request)->getData(true)['data'] ?? [];
+        $rankings = $analytics->getRatingRanking($request)->getData(true)['data'] ?? [];
+        $categoryFrequency = $analytics->getCategoryFrequency($request)->getData(true)['data'] ?? [];
+
+        return compact('summary', 'rankings', 'categoryFrequency');
     }
 }

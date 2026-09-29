@@ -25,6 +25,7 @@ const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 
 // Sesuaikan composable Auth dengan yang Anda gunakan di aplikasi
 const { token, user } = useAuth() 
+const notify = useNotify()
 
 const messages = ref<Message[]>([])
 const newMessage = ref('')
@@ -83,7 +84,7 @@ const sendMessage = async () => {
     messages.value.push(res.data)
     scrollToBottom()
   } catch (err: any) {
-    alert(err.data?.message || 'Gagal mengirim pesan. Pastikan Anda sudah login.')
+    notify.error(err.data?.message || 'Gagal mengirim pesan. Pastikan Anda sudah login.')
     newMessage.value = textPayload // kembalikan teks jika gagal
   } finally {
     sending.value = false
