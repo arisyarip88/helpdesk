@@ -3,13 +3,18 @@ import { ref, computed } from 'vue'
 
 definePageMeta({
   layout: 'admin',
-  middleware: 'auth'
+  middleware: 'auth',
+  roles: ['1', '2', '3']
 })
 
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase || 'http://localhost:8000/api'
 
-const { token } = useAuth()
+const { token, user } = useAuth()
+const userRoleId = computed(() => Number(user.value?.role_id))
+const isDepartmentStaff = computed(() => userRoleId.value === 3)
+const ownDepartmentId = computed(() => user.value?.department_id || '')
+const ownDepartmentName = computed(() => user.value?.department?.nama || ownDepartmentId.value || '-')
 const notify = useNotify()
 
 const getAuthHeaders = () => ({
@@ -38,11 +43,13 @@ const { data: categoriesResponse, pending, error, refresh } = await useAsyncData
 
 const { data: departmentsResponse } = await useAsyncData(
   'category-departments',
-  () => $fetch(`${apiBase}/departments`, {
-    headers: getAuthHeaders(),
-    params: { per_page: 100 }
-  }),
-  { getCachedData: () => undefined }
+  () => isDepartmentStaff.value
+    ? Promise.resolve({ data: user.value?.department ? [user.value.department] : [] })
+    : $fetch(`${apiBase}/departments`, {
+        headers: getAuthHeaders(),
+        params: { per_page: 100 }
+      }),
+  { watch: [userRoleId], getCachedData: () => undefined }
 )
 
 const departments = computed(() => departmentsResponse.value?.data || [])
@@ -87,7 +94,7 @@ const openCreateModal = () => {
   form.value = {
     id: null,
     name: '',
-    department_id: departments.value[0]?.kode || ''
+    department_id: isDepartmentStaff.value ? ownDepartmentId.value : departments.value[0]?.kode || ''
   }
   isModalOpen.value = true
 }
@@ -98,7 +105,7 @@ const openEditModal = (item) => {
   form.value = {
     id: item.id,
     name: item.name || '',
-    department_id: item.department_id || ''
+    department_id: isDepartmentStaff.value ? ownDepartmentId.value : item.department_id || ''
   }
   isModalOpen.value = true
 }
@@ -113,9 +120,9 @@ const handleSubmit = async () => {
   formError.value = ''
 
   const payload = {
-    name: form.value.name,
-    department_id: form.value.department_id
+    name: form.value.name
   }
+  if (!isDepartmentStaff.value) payload.department_id = form.value.department_id
 
   try {
     if (isEditing.value) {
@@ -168,7 +175,7 @@ const handleDelete = async (category) => {
     <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
       <div>
         <h1 class="text-2xl font-bold text-slate-800">Manajemen Kategori</h1>
-          <p class="text-sm text-slate-500">Kelola kategori pada setiap unit kerja.</p>
+          <p class="text-sm text-slate-500">{{ isDepartmentStaff ? `Kelola kategori untuk unit ${ownDepartmentName}.` : 'Kelola kategori pada setiap unit kerja.' }}</p>
       </div>
       <button 
         @click="openCreateModal"
@@ -336,7 +343,11 @@ const handleDelete = async (category) => {
             />
           </div>
 
-          <div>
+          <div v-if="isDepartmentStaff">
+            <label class="block text-xs font-medium text-slate-700 mb-1">Unit Kerja</label>
+            <p class="rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-2 text-sm text-slate-600">{{ ownDepartmentName }}</p>
+          </div>
+          <div v-else>
             <label for="category-department" class="block text-xs font-medium text-slate-700 mb-1">Unit Kerja <span class="text-rose-500">*</span></label>
             <select
               id="category-department"

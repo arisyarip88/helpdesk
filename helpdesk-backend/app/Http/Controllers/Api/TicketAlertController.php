@@ -43,7 +43,6 @@ class TicketAlertController extends Controller
             ['max_hours' => 24, 'alert_mode' => 'automatic']
         );
 
-        abort_unless($setting->alert_mode === 'manual', 422, 'Peringatan manual hanya tersedia pada mode manual.');
         abort_unless(! in_array((int) $ticket->status_id, [4, 5], true), 422, 'Peringatan hanya dapat dikirim untuk tiket yang belum selesai.');
         abort_unless(
             Ticket::query()->whereKey($ticket->id)->overdue($setting->max_hours)->exists(),

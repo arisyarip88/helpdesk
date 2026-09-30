@@ -48,6 +48,55 @@ class CategoryControllerTest extends TestCase
             ->assertJsonValidationErrors('department_id');
     }
 
+    public function test_role_three_can_manage_categories_only_in_its_department(): void
+    {
+        $this->createCategoryTables();
+        DB::table('departments')->insert([
+            ['kode' => 'D1', 'nama' => 'Unit 1', 'created_at' => now(), 'updated_at' => now()],
+            ['kode' => 'D2', 'nama' => 'Unit 2', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+        DB::table('categories')->insert([
+            ['id' => 1, 'name' => 'Kategori Unit 1', 'department_id' => 'D1', 'created_at' => now(), 'updated_at' => now()],
+            ['id' => 2, 'name' => 'Kategori Unit 2', 'department_id' => 'D2', 'created_at' => now(), 'updated_at' => now()],
+        ]);
+        $staff = new User;
+        $staff->id = 33;
+        $staff->role_id = 3;
+        $staff->department_id = 'D1';
+
+        $this->actingAs($staff, 'sanctum')
+            ->getJson('/api/categories')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.department_id', 'D1');
+
+        $createResponse = $this->postJson('/api/categories', ['name' => 'Kategori Baru'])
+            ->assertCreated()
+            ->assertJsonPath('data.department_id', 'D1');
+        $createdCategoryId = $createResponse->json('data.id');
+
+        $this->postJson('/api/categories', ['name' => 'Kategori Unit Lain', 'department_id' => 'D2'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('department_id');
+
+        $this->putJson('/api/categories/1', ['name' => 'Nama Diperbarui'])
+            ->assertOk()
+            ->assertJsonPath('data.name', 'Nama Diperbarui')
+            ->assertJsonPath('data.department_id', 'D1');
+
+        $this->putJson('/api/categories/1', ['name' => 'Pindah Unit', 'department_id' => 'D2'])
+            ->assertUnprocessable()
+            ->assertJsonValidationErrors('department_id');
+
+        $this->getJson('/api/categories/2')->assertForbidden();
+        $this->putJson('/api/categories/2', ['name' => 'Tidak Boleh'])->assertForbidden();
+        $this->deleteJson('/api/categories/2')->assertForbidden();
+
+        $this->deleteJson('/api/categories/'.$createdCategoryId)->assertOk();
+        $this->assertDatabaseMissing('categories', ['id' => $createdCategoryId]);
+        $this->assertDatabaseHas('categories', ['id' => 2, 'department_id' => 'D2']);
+    }
+
     private function createCategoryTables(): void
     {
         Schema::dropIfExists('categories');

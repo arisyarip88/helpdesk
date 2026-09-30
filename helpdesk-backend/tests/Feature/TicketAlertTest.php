@@ -90,6 +90,32 @@ class TicketAlertTest extends TestCase
             ->assertJsonPath('data.0.is_overdue', false);
     }
 
+    public function test_admin_can_send_a_warning_in_automatic_mode(): void
+    {
+        $this->createAlertTables();
+        $this->travelTo('2026-09-28 10:00:00');
+        DB::table('ticket_handling_settings')->insert([
+            'id' => 1,
+            'max_hours' => 30,
+            'alert_mode' => 'automatic',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->insertOpenTicket('D1', '2026-09-27 03:59:00');
+        $admin = new User;
+        $admin->role_id = 2;
+
+        $this->actingAs($admin, 'sanctum')
+            ->postJson('/api/tickets/1/warnings')
+            ->assertCreated()
+            ->assertJsonPath('message', 'Peringatan berhasil dikirim.');
+
+        $this->assertSame(
+            'Tiket ini belum diselesaikan. Mohon segera ditindaklanjuti.',
+            DB::table('ticket_warnings')->value('message')
+        );
+    }
+
     public function test_manual_warning_is_rejected_and_hidden_before_the_sla_deadline(): void
     {
         $this->createAlertTables();
@@ -133,6 +159,35 @@ class TicketAlertTest extends TestCase
         $this->insertOpenTicket('D1', '2026-09-27 03:59:00');
         $admin = new User;
         $admin->role_id = 1;
+
+        $this->actingAs($admin, 'sanctum')
+            ->postJson('/api/tickets/bulk-action', [
+                'ids' => [1],
+                'action' => 'send_warning',
+            ])
+            ->assertOk()
+            ->assertJsonPath('message', 'Peringatan dikirim untuk 1 tiket yang belum selesai.');
+
+        $this->assertSame(
+            'Tiket ini belum diselesaikan. Mohon segera ditindaklanjuti.',
+            DB::table('ticket_warnings')->value('message')
+        );
+    }
+
+    public function test_admin_can_send_bulk_warnings_in_automatic_mode(): void
+    {
+        $this->createAlertTables();
+        DB::table('ticket_handling_settings')->insert([
+            'id' => 1,
+            'max_hours' => 30,
+            'alert_mode' => 'automatic',
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $this->travelTo('2026-09-28 10:00:00');
+        $this->insertOpenTicket('D1', '2026-09-27 03:59:00');
+        $admin = new User;
+        $admin->role_id = 2;
 
         $this->actingAs($admin, 'sanctum')
             ->postJson('/api/tickets/bulk-action', [

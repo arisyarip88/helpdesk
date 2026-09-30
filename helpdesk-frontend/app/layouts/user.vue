@@ -15,7 +15,6 @@ const dropdownRef = ref(null)
 const ticketNotificationRef = ref(null)
 const isTicketNotificationsOpen = ref(false)
 const ticketStatusNotifications = ref([])
-const previousTicketStatuses = ref(null)
 const isFetchingTicketStatuses = ref(false)
 const apiBase = useRuntimeConfig().public.apiBase || 'http://localhost:8000/api'
 const router = useRouter()
@@ -27,43 +26,21 @@ const fetchTicketStatusChanges = async () => {
 
   isFetchingTicketStatuses.value = true
   try {
-    const response = await $fetch(`${apiBase}/tickets`, {
+    const response = await $fetch(`${apiBase}/ticket-status-notifications`, {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token.value}`
-      },
-      params: { per_page: 100 }
+      }
     })
-    const tickets = response.data?.data || []
-    const currentStatuses = new Map(tickets.map(ticket => [Number(ticket.id), {
-      statusId: Number(ticket.status_id),
-      statusName: ticket.status?.name || 'Status berubah',
-      ticketNumber: ticket.nomor_tiket,
-      title: ticket.judul
-    }]))
-
-    if (previousTicketStatuses.value) {
-      const changes = []
-      for (const [ticketId, current] of currentStatuses) {
-        const previous = previousTicketStatuses.value.get(ticketId)
-        if (previous && previous.statusId !== current.statusId) {
-          changes.push({
-            id: `${ticketId}-${current.statusId}-${Date.now()}`,
-            ticketId,
-            statusId: current.statusId,
-            statusName: current.statusName,
-            ticketNumber: current.ticketNumber,
-            title: current.title,
-            changedAt: new Date().toISOString()
-          })
-        }
-      }
-      if (changes.length) {
-        ticketStatusNotifications.value = [...changes.reverse(), ...ticketStatusNotifications.value].slice(0, 20)
-      }
-    }
-
-    previousTicketStatuses.value = currentStatuses
+    ticketStatusNotifications.value = (response.data || []).map(notification => ({
+      id: notification.id,
+      ticketId: notification.ticket_id,
+      statusId: notification.status_id,
+      statusName: notification.status?.name || 'Status berubah',
+      ticketNumber: notification.ticket?.nomor_tiket || '-',
+      title: notification.ticket?.judul || '-',
+      changedAt: notification.created_at
+    }))
   } catch (error) {
     console.error('Gagal memeriksa perubahan status tiket:', error)
   } finally {
@@ -71,10 +48,23 @@ const fetchTicketStatusChanges = async () => {
   }
 }
 
-const openStatusNotification = (notification) => {
+const openStatusNotification = async (notification) => {
+  try {
+    await $fetch(`${apiBase}/ticket-status-notifications/${notification.id}/read`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token.value}`
+      }
+    })
+  } catch (error) {
+    console.error('Gagal menandai notifikasi tiket sudah dibaca:', error)
+    return
+  }
+
   ticketStatusNotifications.value = ticketStatusNotifications.value.filter(item => item.id !== notification.id)
   isTicketNotificationsOpen.value = false
-  router.push({ path: '/user', query: { status_id: notification.statusId } })
+  router.push({ path: '/user', query: { search: notification.ticketNumber } })
 }
 
 const handleClickOutside = (event) => {

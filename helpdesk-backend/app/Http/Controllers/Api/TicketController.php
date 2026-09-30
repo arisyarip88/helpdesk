@@ -8,9 +8,13 @@ use App\Models\Category;
 use App\Models\Department;
 use App\Models\Status;
 use App\Models\Ticket;
+use App\Models\TicketMessage;
+use App\Models\TicketStatusNotification;
 use App\Models\TicketHandlingSetting;
+use App\Models\User;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
@@ -31,7 +35,7 @@ class TicketController extends Controller
         $prioritas = $request->input('prioritas');
         $perPage = $request->input('per_page', $pg);
 
-        $query = Ticket::with(['user', 'category.department', 'status', 'messages']);
+        $query = Ticket::with(['user', 'category.department', 'status']);
 
         // Filter berdasarkan Role
         if ($roleId == 4) {
@@ -75,6 +79,14 @@ class TicketController extends Controller
             $query->where('prioritas', $prioritas);
         }
 
+        if ($request->boolean('new_messages')) {
+            $ticketIds = collect(explode(',', (string) $request->input('new_message_ticket_ids', '')))
+                ->filter(fn ($id) => ctype_digit($id))
+                ->map(fn ($id) => (int) $id)
+                ->all();
+            $query->whereIn('tickets.id', $ticketIds);
+        }
+
         if ($request->boolean('overdue')) {
             $handlingSetting ??= TicketHandlingSetting::firstOrCreate(
                 ['id' => 1],
@@ -116,6 +128,77 @@ class TicketController extends Controller
             'categories' => Category::with('department')->orderBy('name')->get(),
             'overdue_count' => $overdueCount,
         ]);
+    }
+
+    public function chatNotifications(Request $request)
+    {
+        $user = $request->user();
+        $roleId = (int) $user?->role_id;
+
+        abort_unless(in_array($roleId, [1, 2, 3], true), 403);
+
+        $latestMessageIds = TicketMessage::query()
+            ->selectRaw('MAX(id)')
+            ->groupBy('ticket_id');
+
+        $messages = TicketMessage::query()
+            ->whereIn('ticket_messages.id', $latestMessageIds)
+            ->whereHas('ticket', function ($query) use ($roleId, $user) {
+                if ($roleId === 3) {
+                    $query->whereHas('category', fn ($category) =>
+                        $category->where('department_id', $user->department_id)
+                    );
+                }
+            })
+            ->with([
+                'ticket:id,nomor_tiket,judul',
+                'user:id,name,role_id',
+            ])
+            ->orderByDesc('ticket_messages.created_at')
+            ->orderByDesc('ticket_messages.id')
+            ->get();
+
+        return response()->json(['data' => $messages]);
+    }
+
+    public function statusNotifications(Request $request)
+    {
+        $user = $request->user();
+        $roleId = (int) $user?->role_id;
+
+        abort_unless(in_array($roleId, [1, 2, 3, 4], true), 403);
+
+        $notifications = TicketStatusNotification::query()
+            ->where('recipient_id', $user->id)
+            ->whereNull('read_at')
+            ->when($roleId === 3, fn ($query) => $query->whereHas(
+                'ticket.category',
+                fn ($category) => $category->where('department_id', $user->department_id)
+            ))
+            ->when($roleId === 4, fn ($query) => $query->whereHas(
+                'ticket',
+                fn ($ticket) => $ticket->where('user_id', $user->id)
+            ))
+            ->with([
+                'ticket:id,nomor_tiket,judul,status_id',
+                'ticket.status:id,name',
+                'previousStatus:id,name',
+                'actor:id,name',
+            ])
+            ->latest('id')
+            ->limit(50)
+            ->get();
+
+        return response()->json(['data' => $notifications]);
+    }
+
+    public function markStatusNotificationRead(Request $request, TicketStatusNotification $notification)
+    {
+        abort_unless((int) $notification->recipient_id === (int) $request->user()?->id, 404);
+
+        $notification->update(['read_at' => now()]);
+
+        return response()->json(['message' => 'Notifikasi ditandai sudah dibaca.']);
     }
 
     public function exportPdf(Request $request)
@@ -222,6 +305,7 @@ class TicketController extends Controller
     public function update(Request $request, $id)
     {
         $ticket = Ticket::findOrFail($id);
+        $previousStatusId = (int) $ticket->status_id;
 
         if ($request->exists('category_id')) {
             abort_unless(in_array((int) $request->user()?->role_id, [1, 2, 4], true), 403);
@@ -256,7 +340,13 @@ class TicketController extends Controller
             }
         }
 
-        $ticket->update($validated);
+        DB::transaction(function () use ($ticket, $validated, $previousStatusId, $request) {
+            $ticket->update($validated);
+
+            if (isset($validated['status_id']) && (int) $validated['status_id'] !== $previousStatusId) {
+                $this->createStatusNotifications($ticket, $previousStatusId, $request->user());
+            }
+        });
 
         return response()->json([
             'message' => 'Tiket berhasil diperbarui',
@@ -329,7 +419,18 @@ class TicketController extends Controller
                     : null,
                 'rating' => null,
             ];
-            Ticket::whereIn('id', $ids)->update($updates);
+            $ticketsWithPreviousStatus = Ticket::with('category')
+                ->whereIn('id', $ids)
+                ->where('status_id', '!=', $statusId)
+                ->get();
+            DB::transaction(function () use ($ids, $updates, $ticketsWithPreviousStatus, $statusId, $request) {
+                Ticket::whereIn('id', $ids)->update($updates);
+                foreach ($ticketsWithPreviousStatus as $ticket) {
+                    $previousStatusId = (int) $ticket->status_id;
+                    $ticket->status_id = $statusId;
+                    $this->createStatusNotifications($ticket, $previousStatusId, $request->user());
+                }
+            });
             $message = 'Status untuk '.count($ids).' tiket berhasil diperbarui.';
         } elseif ($action === 'change_priority') {
             $priority = $request->validate([
@@ -342,7 +443,6 @@ class TicketController extends Controller
                 ['id' => 1],
                 ['max_hours' => 24, 'alert_mode' => 'automatic']
             );
-            abort_unless($setting->alert_mode === 'manual', 422, 'Peringatan massal hanya tersedia pada mode manual.');
 
             $tickets = Ticket::whereIn('id', $ids)
                 ->whereNotIn('status_id', [4, 5])
@@ -371,6 +471,44 @@ class TicketController extends Controller
         ]);
 
         return $this->bulkAction($request);
+    }
+
+    private function createStatusNotifications(Ticket $ticket, int $previousStatusId, ?User $actor): void
+    {
+        if (! $actor || ! $ticket->status_id) {
+            return;
+        }
+
+        $ticket->loadMissing('category');
+        $recipients = User::query()
+            ->where(function ($query) use ($ticket) {
+                $query->whereIn('role_id', [1, 2])
+                    ->orWhere(function ($reporter) use ($ticket) {
+                        $reporter->where('role_id', 4)
+                            ->where('id', $ticket->user_id);
+                    })
+                    ->orWhere(function ($departmentUsers) use ($ticket) {
+                        $departmentUsers->where('role_id', 3)
+                            ->where('department_id', $ticket->category?->department_id);
+                    });
+            })
+            ->where('id', '!=', $actor->id)
+            ->pluck('id');
+
+        $now = now();
+        $notifications = $recipients->map(fn ($recipientId) => [
+            'ticket_id' => $ticket->id,
+            'recipient_id' => $recipientId,
+            'actor_id' => $actor->id,
+            'previous_status_id' => $previousStatusId ?: null,
+            'status_id' => (int) $ticket->status_id,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->all();
+
+        if ($notifications) {
+            TicketStatusNotification::insert($notifications);
+        }
     }
 
     public function stats(Request $request)

@@ -4,8 +4,10 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Category;
+use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class CategoryController extends Controller
 {
@@ -17,6 +19,9 @@ class CategoryController extends Controller
         ]);
 
         $query = Category::query()->with('department');
+        if ((int) $request->user()->role_id === 3) {
+            $query->where('department_id', $request->user()->department_id);
+        }
         if (! empty($validated['search'])) {
             $query->where(function ($builder) use ($validated) {
                 $builder->where('name', 'like', '%'.$validated['search'].'%')
@@ -29,17 +34,28 @@ class CategoryController extends Controller
         return response()->json($query->latest()->paginate($validated['per_page'] ?? 10));
     }
 
-    public function show(int $id): JsonResponse
+    public function show(Request $request, int $id): JsonResponse
     {
-        return response()->json(Category::with('department')->findOrFail($id));
+        $category = Category::with('department')->findOrFail($id);
+        $this->authorizeCategoryUnit($category, $request->user());
+
+        return response()->json($category);
     }
 
     public function store(Request $request): JsonResponse
     {
+        $user = $request->user();
+        abort_if((int) $user->role_id === 3 && ! $user->department_id, 403, 'Akun belum memiliki unit kerja.');
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'department_id' => 'required|string|exists:departments,kode',
+            'department_id' => (int) $user->role_id === 3
+                ? ['sometimes', 'string', Rule::in([$user->department_id])]
+                : 'required|string|exists:departments,kode',
         ]);
+        if ((int) $user->role_id === 3) {
+            $validated['department_id'] = $user->department_id;
+        }
 
         $category = Category::create($validated)->load('department');
 
@@ -52,10 +68,19 @@ class CategoryController extends Controller
     public function update(Request $request, int $id): JsonResponse
     {
         $category = Category::findOrFail($id);
+        $user = $request->user();
+        $this->authorizeCategoryUnit($category, $user);
+        abort_if((int) $user->role_id === 3 && ! $user->department_id, 403, 'Akun belum memiliki unit kerja.');
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
-            'department_id' => 'required|string|exists:departments,kode',
+            'department_id' => (int) $user->role_id === 3
+                ? ['sometimes', 'string', Rule::in([$user->department_id])]
+                : 'required|string|exists:departments,kode',
         ]);
+        if ((int) $user->role_id === 3) {
+            $validated['department_id'] = $user->department_id;
+        }
 
         $category->update($validated);
 
@@ -65,10 +90,22 @@ class CategoryController extends Controller
         ]);
     }
 
-    public function destroy(int $id): JsonResponse
+    public function destroy(Request $request, int $id): JsonResponse
     {
-        Category::findOrFail($id)->delete();
+        $category = Category::findOrFail($id);
+        $this->authorizeCategoryUnit($category, $request->user());
+        $category->delete();
 
         return response()->json(['message' => 'Kategori berhasil dihapus.']);
+    }
+
+    private function authorizeCategoryUnit(Category $category, User $user): void
+    {
+        if ((int) $user->role_id === 3) {
+            abort_unless(
+                $user->department_id && $category->department_id === $user->department_id,
+                403
+            );
+        }
     }
 }

@@ -36,13 +36,20 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/me', [AuthController::class, 'me']);
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/tickets/stats', [TicketController::class, 'stats']);
+    Route::get('/ticket-status-notifications', [TicketController::class, 'statusNotifications'])
+        ->middleware('role:1,2,3,4');
+    Route::post('/ticket-status-notifications/{notification}/read', [TicketController::class, 'markStatusNotificationRead'])
+        ->middleware('role:1,2,3,4');
 
     Route::middleware('role:1,2')->group(function () {
         Route::get('/ticket-handling-settings', [TicketAlertController::class, 'settings']);
         Route::put('/ticket-handling-settings', [TicketAlertController::class, 'updateSettings']);
         Route::post('/tickets/{ticket}/warnings', [TicketAlertController::class, 'sendWarning']);
-        Route::apiResource('/categories', CategoryController::class);
 
+    });
+
+    Route::middleware('role:1,2,3')->group(function () {
+        Route::apiResource('/categories', CategoryController::class);
     });
 
     Route::middleware('role:3')->group(function () {
@@ -69,6 +76,8 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/tickets/bulk-status', [TicketController::class, 'bulkUpdateStatus']);
         Route::get('/tickets/export/pdf', [TicketController::class, 'exportPdf']);
         Route::get('/tickets/export/excel', [TicketController::class, 'exportExcel']);
+        Route::get('/tickets/chat-notifications', [TicketController::class, 'chatNotifications'])
+            ->middleware('role:1,2,3');
         Route::apiResource('tickets', TicketController::class);
 
         // Ticket Messages / Chat

@@ -25,7 +25,7 @@ const getAuthHeaders = () => ({
   'Authorization': `Bearer ${token.value}`
 })
 
-const fetchWarningMode = async () => {
+const fetchWarningSettings = async () => {
   try {
     const endpoint = userRoleId.value === 3
       ? `${apiBase}/ticket-warnings`
@@ -33,16 +33,14 @@ const fetchWarningMode = async () => {
     const response = await $fetch(endpoint, {
       headers: getAuthHeaders()
     })
-    warningMode.value = response.alert_mode || response.data?.alert_mode || 'automatic'
     warningMaxHours.value = Number(response.max_hours || response.data?.max_hours) || 24
   } catch {
-    warningMode.value = 'automatic'
     warningMaxHours.value = 24
   }
 }
 
 watch(userRoleId, (roleId) => {
-  if ([1, 2, 3].includes(roleId)) fetchWarningMode()
+  if ([1, 2, 3].includes(roleId)) fetchWarningSettings()
 }, { immediate: true })
 
 // --- 1. STATE FILTER & PAGINASI ---
@@ -53,19 +51,41 @@ const selectedStatusFilter = ref(String(route.query.status_id || ''))
 const selectedDepartmentFilter = ref(String(route.query.department_id || ''))
 const selectedPriorityFilter = ref(String(route.query.prioritas || ''))
 const overdueOnly = ref(String(route.query.overdue || '') === '1')
+const newMessagesOnly = ref(String(route.query.new_messages || '') === '1')
+const unreadChatNotifications = useState('admin-unread-chat-notifications', () => ({}))
+const newMessageTicketIds = computed(() => Object.keys(unreadChatNotifications.value))
 const canFilterDepartment = computed(() => [1, 2].includes(userRoleId.value))
 const showPriorityStatus = computed(() => [1, 2, 3].includes(userRoleId.value))
-const canDeleteChat = computed(() => ![3, 4].includes(userRoleId.value))
+const canDeleteAnyChatMessage = computed(() => [1, 2].includes(userRoleId.value))
+const canDeleteLatestChatMessage = computed(() => [1, 2, 3, 4].includes(userRoleId.value))
 const canDeleteTicket = computed(() => userRoleId.value !== 3)
-const sendingWarningTicketId = ref(null)
-const warningMode = ref('automatic')
 const warningMaxHours = ref(24)
+const slaClock = ref(Date.now())
+const sendingWarningTicketId = ref(null)
+let slaClockInterval = null
 
 const hasExceededWarningDeadline = (ticket) => {
   if (!ticket?.created_at || [4, 5].includes(Number(ticket.status_id))) return false
 
   const createdAt = new Date(ticket.created_at).getTime()
-  return Number.isFinite(createdAt) && Date.now() - createdAt >= warningMaxHours.value * 60 * 60 * 1000
+  return Number.isFinite(createdAt) && slaClock.value - createdAt >= warningMaxHours.value * 60 * 60 * 1000
+}
+
+const sendTicketWarning = async (ticket) => {
+  if (![1, 2].includes(userRoleId.value) || sendingWarningTicketId.value !== null) return
+
+  sendingWarningTicketId.value = ticket.id
+  try {
+    const response = await $fetch(`${apiBase}/tickets/${ticket.id}/warnings`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    })
+    notify.success(response.message || 'Peringatan berhasil dikirim ke petugas unit.')
+  } catch (err) {
+    notify.error(err.data?.message || 'Gagal mengirim peringatan.')
+  } finally {
+    sendingWarningTicketId.value = null
+  }
 }
 
 // Sinkronisasi State jika Query URL berubah
@@ -79,6 +99,7 @@ watch(
     selectedDepartmentFilter.value = String(newQuery.department_id || '')
     selectedPriorityFilter.value = String(newQuery.prioritas || '')
     overdueOnly.value = String(newQuery.overdue || '') === '1'
+    newMessagesOnly.value = String(newQuery.new_messages || '') === '1'
   }
 )
 
@@ -101,7 +122,8 @@ const updateQueryParams = () => {
       status_id: selectedStatusFilter.value || undefined,
       department_id: canFilterDepartment.value ? selectedDepartmentFilter.value || undefined : undefined,
       prioritas: showPriorityStatus.value ? selectedPriorityFilter.value || undefined : undefined,
-      overdue: overdueOnly.value ? 1 : undefined
+      overdue: overdueOnly.value ? 1 : undefined,
+      new_messages: newMessagesOnly.value ? 1 : undefined
     }
   })
 }
@@ -119,17 +141,23 @@ const { data: responseData, pending, error, refresh } = await useAsyncData(
       department_id: canFilterDepartment.value ? selectedDepartmentFilter.value : undefined,
       prioritas: showPriorityStatus.value ? selectedPriorityFilter.value : undefined,
       overdue: overdueOnly.value ? 1 : undefined,
+      new_messages: newMessagesOnly.value ? 1 : undefined,
+      new_message_ticket_ids: newMessagesOnly.value ? newMessageTicketIds.value.join(',') : undefined,
       role_id: userRoleId.value,
       user_id: userId.value
     }
   }),
   {
-    watch: [currentPage, perPage, searchQuery, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly],
+    watch: [currentPage, perPage, searchQuery, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly, newMessagesOnly],
     getCachedData: () => undefined
   }
 )
 
-watch([currentPage, perPage, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly], () => {
+watch(unreadChatNotifications, () => {
+  if (newMessagesOnly.value) refresh()
+}, { deep: true })
+
+watch([currentPage, perPage, selectedStatusFilter, selectedDepartmentFilter, selectedPriorityFilter, overdueOnly, newMessagesOnly], () => {
   updateQueryParams()
 })
 
@@ -254,13 +282,9 @@ const toggleStatusFilter = (statusId) => {
 // --- 3. STATE & OPERASI BULK ACTION ---
 const selectedIds = ref([])
 const isBulkModalOpen = ref(false)
-const bulkActionType = ref('') // 'delete', 'change_status', 'change_priority'
+const bulkActionType = ref('') // 'delete', 'change_status', 'change_priority', 'send_warning'
 const bulkActionValue = ref('')
 const submittingBulk = ref(false)
-const selectedOverdueCount = computed(() => tickets.value.filter(ticket =>
-  selectedIds.value.includes(ticket.id) && hasExceededWarningDeadline(ticket)
-).length)
-
 const isSelectAll = computed({
   get: () => tickets.value.length > 0 && selectedIds.value.length === tickets.value.length,
   set: (val) => {
@@ -296,11 +320,9 @@ const executeBulkAction = async () => {
 
     selectedIds.value = []
     isBulkModalOpen.value = false
+    if (response.message) notify.success(response.message)
     await refresh()
     if (refreshStats) await refreshStats()
-    if (bulkActionType.value === 'send_warning') {
-      notify.success(response.message || 'Peringatan bulk berhasil dikirim.')
-    }
   } catch (err) {
     notify.error(err.data?.message || 'Gagal memproses bulk action.')
   } finally {
@@ -395,7 +417,9 @@ const handleSubmit = async () => {
 
   const formData = new FormData()
   formData.append('user_id', userId.value || '')
-  formData.append('category_id', form.value.category_id)
+  if (userRoleId.value !== 3) {
+    formData.append('category_id', form.value.category_id)
+  }
   formData.append('status_id', form.value.status_id || 1)
   formData.append('judul', form.value.judul)
   formData.append('deskripsi', form.value.deskripsi)
@@ -456,24 +480,6 @@ const handleDelete = async (id) => {
   }
 }
 
-const sendTicketWarning = async (ticket) => {
-  if (![1, 2].includes(userRoleId.value) || warningMode.value !== 'manual' || [4, 5].includes(Number(ticket.status_id))) return
-  if (!(await notify.confirm({ title: 'Kirim Peringatan', message: `Kirim peringatan penanganan untuk tiket ${ticket.nomor_tiket}?` }))) return
-
-  sendingWarningTicketId.value = ticket.id
-  try {
-    const response = await $fetch(`${apiBase}/tickets/${ticket.id}/warnings`, {
-      method: 'POST',
-      headers: getAuthHeaders()
-    })
-    notify.success(response.message || 'Peringatan berhasil dikirim.')
-  } catch (err) {
-    notify.error(err.data?.message || 'Gagal mengirim peringatan tiket.')
-  } finally {
-    sendingWarningTicketId.value = null
-  }
-}
-
 // --- 5. FITUR CHAT REALTIME & NOTIFIKASI ---
 const isDetailChatActive = ref(false)
 const selectedTicket = ref(null)
@@ -486,6 +492,7 @@ const newMessage = ref('')
 
 const isDetailModalOpen = ref(false)
 const detailTicket = ref(null)
+const detailHasNewChatMessages = ref(false)
 const detailStatus = ref('')
 const detailCategoryId = ref('')
 const savingTicketDetails = ref(false)
@@ -522,6 +529,7 @@ const selectDetailCategory = (category) => {
 
 const openDetailModal = (ticket) => {
   detailTicket.value = ticket
+  detailHasNewChatMessages.value = Boolean(unreadChatNotifications.value[ticket.id])
   detailStatus.value = String(ticket.status_id || '')
   detailCategoryId.value = String(ticket.category_id || ticket.category?.id || '')
   detailSaveError.value = ''
@@ -534,6 +542,7 @@ const openDetailModal = (ticket) => {
 const closeDetailModal = () => {
   isDetailModalOpen.value = false
   detailTicket.value = null
+  detailHasNewChatMessages.value = false
   detailSaveError.value = ''
   detailCategorySearch.value = ''
   isDetailCategoryDropdownOpen.value = false
@@ -581,11 +590,7 @@ const saveTicketDetails = async () => {
   }
 }
 
-const unreadCounts = ref({})
-const lastMessageCounts = ref({})
-
 let chatInterval = null
-let globalPollInterval = null
 
 const playNotificationSound = () => {
   try {
@@ -611,7 +616,7 @@ const openTicketChat = async (ticket) => {
   isDetailChatActive.value = true
   chatMessages.value = []
   
-  unreadCounts.value[ticket.id] = 0
+  delete unreadChatNotifications.value[ticket.id]
 
   await fetchMessages()
 
@@ -646,11 +651,12 @@ const fetchMessages = async (silent = false) => {
       const lastMsg = fetched[fetched.length - 1]
       if (lastMsg.user_id !== userId.value) {
         playNotificationSound()
+        detailHasNewChatMessages.value = true
       }
     }
 
     chatMessages.value = fetched
-    lastMessageCounts.value[selectedTicket.value.id] = fetched.length
+    delete unreadChatNotifications.value[selectedTicket.value.id]
   } catch (err) {
     console.error('Gagal mengambil pesan:', err)
   } finally {
@@ -677,7 +683,9 @@ const sendMessage = async () => {
 }
 
 const deleteSingleMessage = async (messageId) => {
-  if (!canDeleteChat.value || !selectedTicket.value) return
+  if (!canDeleteLatestChatMessage.value || !selectedTicket.value) return
+  const latestMessage = chatMessages.value[chatMessages.value.length - 1]
+  if (!canDeleteAnyChatMessage.value && latestMessage?.id !== messageId) return
   if (!(await notify.confirm({ title: 'Hapus Pesan', message: 'Apakah Anda yakin ingin menghapus pesan ini?', confirmText: 'Ya, Hapus', variant: 'danger' }))) return
 
   deletingMessageId.value = messageId
@@ -687,9 +695,6 @@ const deleteSingleMessage = async (messageId) => {
       headers: getAuthHeaders()
     })
     chatMessages.value = chatMessages.value.filter(m => m.id !== messageId)
-    if (lastMessageCounts.value[selectedTicket.value.id]) {
-      lastMessageCounts.value[selectedTicket.value.id]--
-    }
   } catch (err) {
     notify.error(err.data?.message || 'Gagal menghapus pesan.')
   } finally {
@@ -698,7 +703,7 @@ const deleteSingleMessage = async (messageId) => {
 }
 
 const deleteAllMessages = async () => {
-  if (!canDeleteChat.value || !selectedTicket.value) return
+  if (!canDeleteAnyChatMessage.value || !selectedTicket.value) return
   if (!(await notify.confirm({ title: 'Hapus Semua Pesan', message: 'Apakah Anda yakin ingin menghapus SELURUH pesan percakapan pada tiket ini?', confirmText: 'Ya, Hapus Semua', variant: 'danger' }))) return
 
   deletingAll.value = true
@@ -708,8 +713,6 @@ const deleteAllMessages = async () => {
       headers: getAuthHeaders()
     })
     chatMessages.value = []
-    lastMessageCounts.value[selectedTicket.value.id] = 0
-    unreadCounts.value[selectedTicket.value.id] = 0
   } catch (err) {
     notify.error(err.data?.message || 'Gagal menghapus semua pesan.')
   } finally {
@@ -717,40 +720,15 @@ const deleteAllMessages = async () => {
   }
 }
 
-const checkGlobalUnreadMessages = async () => {
-  if (isDetailChatActive.value || !tickets.value.length) return
-
-  for (const ticket of tickets.value) {
-    try {
-      const res = await $fetch(`${apiBase}/tickets/${ticket.id}/messages`, {
-        headers: getAuthHeaders()
-      })
-      const messages = res.data || res || []
-      const currentCount = messages.length
-      const prevCount = lastMessageCounts.value[ticket.id]
-
-      if (prevCount !== undefined && currentCount > prevCount) {
-        const diff = currentCount - prevCount
-        unreadCounts.value[ticket.id] = (unreadCounts.value[ticket.id] || 0) + diff
-        playNotificationSound()
-      }
-
-      lastMessageCounts.value[ticket.id] = currentCount
-    } catch (e) {
-      // Silent error
-    }
-  }
-}
-
-onMounted(() => {
-  globalPollInterval = setInterval(() => {
-    checkGlobalUnreadMessages()
-  }, 7000)
-})
-
 onUnmounted(() => {
   if (chatInterval) clearInterval(chatInterval)
-  if (globalPollInterval) clearInterval(globalPollInterval)
+  if (slaClockInterval) clearInterval(slaClockInterval)
+})
+
+onMounted(() => {
+  slaClockInterval = setInterval(() => {
+    slaClock.value = Date.now()
+  }, 60000)
 })
 </script>
 
@@ -937,6 +915,22 @@ onUnmounted(() => {
             {{ overdueTicketCount > 99 ? '99+' : overdueTicketCount }}
           </span>
         </button>
+        <button
+          v-if="[1, 2, 3].includes(userRoleId)"
+          type="button"
+          :aria-pressed="newMessagesOnly"
+          @click="newMessagesOnly = !newMessagesOnly; currentPage = 1"
+          class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition"
+          :class="newMessagesOnly ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700'"
+        >
+          <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          </svg>
+          {{ newMessagesOnly ? 'Tampilkan Semua' : 'Pesan Baru' }}
+          <span class="inline-flex min-w-5 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold" :class="newMessagesOnly ? 'bg-white text-emerald-700' : 'bg-emerald-100 text-emerald-700'">
+            {{ newMessageTicketIds.length > 99 ? '99+' : newMessageTicketIds.length }}
+          </span>
+        </button>
         <div class="flex items-center gap-2 text-xs text-slate-500">
           <span>Tampilkan:</span>
           <select v-model="perPage" class="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500">
@@ -1015,17 +1009,29 @@ onUnmounted(() => {
                 <div class="flex flex-col items-start gap-1.5">
                   <span class="font-mono text-xs font-bold text-indigo-600">{{ item.nomor_tiket }}</span>
                   <button
-                    v-if="warningMode === 'manual' && [1, 2].includes(userRoleId) && hasExceededWarningDeadline(item)"
+                    v-if="[1, 2].includes(userRoleId) && hasExceededWarningDeadline(item)"
                     type="button"
-                    :disabled="sendingWarningTicketId === item.id"
-                    :title="`Kirim peringatan untuk ${item.nomor_tiket}`"
+                    class="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-800 hover:bg-amber-100 disabled:cursor-wait disabled:opacity-60"
+                    :title="`Kirim peringatan ke petugas unit; tiket melewati SLA ${warningMaxHours} jam`"
+                    :disabled="sendingWarningTicketId !== null"
                     @click.stop="sendTicketWarning(item)"
-                    class="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 transition hover:bg-amber-100 disabled:opacity-50"
                   >
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
                     </svg>
-                    {{ sendingWarningTicketId === item.id ? 'Mengirim...' : 'Peringatkan' }}
+                    {{ sendingWarningTicketId === item.id ? 'Mengirim…' : 'Peringatkan' }}
+                  </button>
+                  <button
+                    v-else-if="userRoleId === 3 && hasExceededWarningDeadline(item)"
+                    type="button"
+                    class="inline-flex items-center gap-1 rounded-md bg-rose-50 px-2 py-1 text-[11px] font-semibold text-rose-700 hover:bg-rose-100"
+                    :title="`Buka detail tiket yang melewati SLA ${warningMaxHours} jam`"
+                    @click.stop="openDetailModal(item)"
+                  >
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v4m0 4h.01M10.3 3.9 1.8 18.2A2 2 0 003.5 21h17a2 2 0 001.7-2.8L13.7 3.9a2 2 0 00-3.4 0z" />
+                    </svg>
+                    Melewati SLA
                   </button>
                 </div>
               </td>
@@ -1065,22 +1071,8 @@ onUnmounted(() => {
                 }">{{ item.status?.name || '-' }}</span>
               </td>
               <td class="px-6 py-4 text-right">
-                <div class="flex justify-end gap-2">
-                  <!-- <button
-                    type="button"
-                    :aria-label="`Buka chat tiket ${item.nomor_tiket}`"
-                    :title="`Chat tiket ${item.nomor_tiket}`"
-                    @click.stop="openTicketChat(item)"
-                    class="relative inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-white px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-50"
-                  >
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-                    </svg>
-                    Chat
-                    <span v-if="unreadCounts[item.id] > 0" class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
-                      {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
-                    </span>
-                  </button> -->
+                <div class="flex flex-col items-end gap-1.5">
+                  <span v-if="unreadChatNotifications[item.id]" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Pesan baru</span>
                   <button
                     type="button"
                     :aria-label="`Lihat detail tiket ${item.nomor_tiket}`"
@@ -1100,7 +1092,7 @@ onUnmounted(() => {
             <!-- Empty -->
             <tr v-if="!pending && tickets.length === 0">
               <td :colspan="showPriorityStatus ? 7 : 5" class="px-6 py-12 text-center text-slate-400">
-                {{ overdueOnly ? 'Tidak ada tiket yang melewati batas penanganan.' : 'Data tiket aduan tidak ditemukan.' }}
+                {{ overdueOnly ? 'Tidak ada tiket yang melewati batas penanganan.' : newMessagesOnly ? 'Tidak ada tiket dengan pesan chat baru.' : 'Data tiket aduan tidak ditemukan.' }}
               </td>
             </tr>
           </tbody>
@@ -1146,6 +1138,13 @@ onUnmounted(() => {
         <div class="h-4 w-px bg-slate-700"></div>
 
         <div class="flex items-center gap-2">
+          <button
+            v-if="[1, 2].includes(userRoleId)"
+            @click="openBulkModal('send_warning')"
+            class="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-medium transition-colors"
+          >
+            Kirim Peringatan
+          </button>
           <button 
             @click="openBulkModal('change_status')" 
             class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-medium transition-colors"
@@ -1157,13 +1156,6 @@ onUnmounted(() => {
             class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 rounded-xl text-xs font-medium transition-colors"
           >
             Ubah Prioritas
-          </button>
-          <button
-            v-if="warningMode === 'manual' && [1, 2].includes(userRoleId) && selectedOverdueCount > 0"
-            @click="openBulkModal('send_warning')"
-            class="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-medium transition-colors"
-          >
-            Kirim Peringatan
           </button>
           <button 
             @click="openBulkModal('delete')" 
@@ -1186,15 +1178,16 @@ onUnmounted(() => {
           <span v-if="bulkActionType === 'delete'">Hapus Tiket Terpilih</span>
           <span v-else-if="bulkActionType === 'change_status'">Ubah Status Tiket</span>
           <span v-else-if="bulkActionType === 'change_priority'">Ubah Prioritas Tiket</span>
-          <span v-else-if="bulkActionType === 'send_warning'">Kirim Peringatan Tiket</span>
+          <span v-else-if="bulkActionType === 'send_warning'">Kirim Peringatan SLA</span>
         </h3>
         
         <p class="text-xs text-slate-500 mb-4">
-          Tindakan ini akan diterapkan pada <strong class="text-indigo-600">{{ selectedIds.length }} tiket</strong> yang dipilih.
-        </p>
-
-        <p v-if="bulkActionType === 'send_warning'" class="mb-4 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          Peringatan dikirim ke role 3 untuk tiket yang belum selesai. Tiket complete/rejected dilewati.
+          <template v-if="bulkActionType === 'send_warning'">
+            Peringatan akan dikirim kepada petugas unit untuk tiket terpilih yang belum selesai dan sudah melewati batas SLA.
+          </template>
+          <template v-else>
+            Tindakan ini akan diterapkan pada <strong class="text-indigo-600">{{ selectedIds.length }} tiket</strong> yang dipilih.
+          </template>
         </p>
 
         <!-- Dropdown jika Ubah Status -->
@@ -1236,7 +1229,7 @@ onUnmounted(() => {
             :disabled="submittingBulk || (['change_status', 'change_priority'].includes(bulkActionType) && !bulkActionValue)"
             class="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-semibold"
           >
-            {{ submittingBulk ? 'Memproses...' : 'Terapkan' }}
+            {{ submittingBulk ? 'Memproses...' : bulkActionType === 'send_warning' ? 'Kirim Peringatan' : 'Terapkan' }}
           </button>
         </div>
       </div>
@@ -1248,7 +1241,10 @@ onUnmounted(() => {
         <header class="p-5 border-b border-slate-100 flex items-start justify-between gap-4">
           <div class="min-w-0">
             <p class="text-xs font-mono font-semibold text-indigo-600">{{ detailTicket.nomor_tiket }}</p>
-            <h2 id="ticket-detail-title" class="mt-1 text-lg font-bold text-slate-800">Detail Tiket</h2>
+            <div class="mt-1 flex flex-wrap items-center gap-2">
+              <h2 id="ticket-detail-title" class="text-lg font-bold text-slate-800">Detail Tiket</h2>
+              <span v-if="detailHasNewChatMessages" class="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">Pesan chat baru</span>
+            </div>
           </div>
           <button @click="closeDetailModal" aria-label="Tutup detail" class="p-1 text-slate-400 hover:text-slate-700">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1365,7 +1361,7 @@ onUnmounted(() => {
                 <p class="text-xs text-slate-500">{{ detailTicket.judul }}</p>
               </div>
               <button
-                v-if="canDeleteChat && chatMessages.length > 0"
+                v-if="canDeleteAnyChatMessage && chatMessages.length > 0"
                 @click="deleteAllMessages"
                 :disabled="deletingAll"
                 class="px-2.5 py-1.5 rounded-lg text-xs font-medium text-rose-600 bg-rose-50 hover:bg-rose-100 disabled:opacity-50"
@@ -1392,7 +1388,7 @@ onUnmounted(() => {
                     {{ message.message }}
                   </p>
                   <button
-                    v-if="canDeleteChat"
+                    v-if="canDeleteAnyChatMessage || message.id === chatMessages[chatMessages.length - 1]?.id"
                     @click="deleteSingleMessage(message.id)"
                     :disabled="deletingMessageId === message.id"
                     title="Hapus pesan"
@@ -1426,7 +1422,14 @@ onUnmounted(() => {
 
         <footer class="p-5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
           <div class="flex items-center gap-2">
-            <!-- <button @click="openEditModal(detailTicket); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100">Edit</button> -->
+            <button
+              v-if="[3, 4].includes(userRoleId) && isEditAllowed(detailTicket)"
+              type="button"
+              @click="openEditModal(detailTicket); closeDetailModal()"
+              class="px-3 py-2 rounded-lg text-sm font-medium bg-indigo-50 text-indigo-600 hover:bg-indigo-100"
+            >
+              Edit
+            </button>
             <button v-if="canDeleteTicket" @click="handleDelete(detailTicket.id); closeDetailModal()" class="px-3 py-2 rounded-lg text-sm font-medium bg-rose-50 text-rose-600 hover:bg-rose-100">Hapus</button>
             <button @click="closeDetailModal" class="px-3 py-2 rounded-lg text-sm font-medium text-slate-600 hover:bg-slate-100">Tutup</button>
           </div>
@@ -1465,7 +1468,7 @@ onUnmounted(() => {
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
+            <div v-if="userRoleId !== 3">
               <label class="block text-xs font-medium text-slate-700 mb-1">Kategori Aduan:<span class="text-rose-500">*</span></label>
               <select 
                 v-model="form.category_id" 
@@ -1481,6 +1484,12 @@ onUnmounted(() => {
                   {{ category.name }} ({{ category.department?.nama || '-' }})
                 </option>
               </select>
+            </div>
+            <div v-else>
+              <label class="block text-xs font-medium text-slate-700 mb-1">Kategori Aduan</label>
+              <p class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">
+                {{ form.category_id ? categoriesList.find(category => Number(category.id) === Number(form.category_id))?.name || 'Kategori tiket' : 'Kategori tiket' }}
+              </p>
             </div>
 
             <div>

@@ -362,7 +362,6 @@ const chatMessages = ref([])
 const loadingChat = ref(false)
 const sendingMessage = ref(false)
 const deletingMessageId = ref(null)
-const deletingAll = ref(false)
 const newMessage = ref('')
 const isRatingModalOpen = ref(false)
 const ratingTicket = ref(null)
@@ -406,7 +405,6 @@ const globalLoadingMessage = computed(() => {
   if (isDeletingTicket.value) return 'Menghapus tiket...'
   if (submitting.value) return 'Menyimpan tiket...'
   if (sendingMessage.value) return 'Mengirim pesan...'
-  if (deletingAll.value) return 'Menghapus percakapan...'
   if (deletingMessageId.value !== null) return 'Menghapus pesan...'
   if (submittingRating.value) return 'Menyimpan rating...'
   if (loadingChat.value) return 'Memuat percakapan...'
@@ -550,9 +548,12 @@ const sendMessage = async () => {
 }
 
 const deleteSingleMessage = async (messageId) => {
+  const latestMessage = chatMessages.value[chatMessages.value.length - 1]
+  if (latestMessage?.id !== messageId) return
+
   const confirmed = await requestActionConfirmation(
     'Hapus pesan?',
-    'Pesan ini akan dihapus dari percakapan tiket.',
+    'Pesan terakhir pada percakapan tiket ini akan dihapus.',
     'Hapus pesan'
   )
   if (!confirmed) return
@@ -571,30 +572,6 @@ const deleteSingleMessage = async (messageId) => {
     showActionNotice('Pesan gagal dihapus', err.data?.message || 'Terjadi kesalahan saat menghapus pesan.')
   } finally {
     deletingMessageId.value = null
-  }
-}
-
-const deleteAllMessages = async () => {
-  const confirmed = await requestActionConfirmation(
-    'Bersihkan seluruh chat?',
-    'Semua pesan pada percakapan tiket ini akan dihapus dan tidak dapat dipulihkan.',
-    'Hapus semua chat'
-  )
-  if (!confirmed) return
-
-  deletingAll.value = true
-  try {
-    await $fetch(`${apiBase}/tickets/${selectedTicket.value.id}/messages`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
-    })
-    chatMessages.value = []
-    lastMessageCounts.value[selectedTicket.value.id] = 0
-    unreadCounts.value[selectedTicket.value.id] = 0
-  } catch (err) {
-    showActionNotice('Chat gagal dihapus', err.data?.message || 'Terjadi kesalahan saat menghapus percakapan.')
-  } finally {
-    deletingAll.value = false
   }
 }
 
@@ -1364,19 +1341,6 @@ const toggleStatusFilter = (statusId) => {
       <!-- Tombol Aksi Header -->
       <div class="flex items-center gap-2 shrink-0 ml-3">
         <button 
-          v-if="chatMessages.length > 0"
-          @click="deleteAllMessages"
-          :disabled="deletingAll"
-          title="Hapus Semua Percakapan"
-          class="p-2 text-rose-600 bg-rose-50 hover:bg-rose-100 rounded-xl transition-all disabled:opacity-50 flex items-center gap-1 text-xs font-semibold"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-          </svg>
-          <span class="hidden sm:inline">{{ deletingAll ? 'Membawa...' : 'Bersihkan Chat' }}</span>
-        </button>
-
-        <button 
           @click="closeChatModal" 
           class="text-slate-400 hover:text-slate-600 p-2 rounded-xl hover:bg-slate-200/60 transition"
           title="Tutup Chat"
@@ -1454,6 +1418,7 @@ const toggleStatusFilter = (statusId) => {
 
             <!-- Tombol Hapus Pesan Individu (Muncul saat Hover) -->
             <button 
+              v-if="msg.id === chatMessages[chatMessages.length - 1]?.id"
               @click="deleteSingleMessage(msg.id)"
               :disabled="deletingMessageId === msg.id"
               title="Hapus pesan ini"

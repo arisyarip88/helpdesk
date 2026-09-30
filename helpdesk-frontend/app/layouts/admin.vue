@@ -7,10 +7,13 @@ const isKnowledgeMenuOpen = ref(route.path.startsWith('/admin/knowledge-base'))
 const isTicketNotificationOpen = ref(false)
 const ticketNotificationStats = ref({ open: 0, complete: 0, rejected: 0 })
 const unreadTicketNotifications = ref({ open: 0, complete: 0, rejected: 0 })
+const unreadChatNotifications = useState('admin-unread-chat-notifications', () => ({}))
 const departmentStatusNotifications = ref([])
 const departmentTicketWarnings = ref([])
-const previousDepartmentTicketStatuses = ref(null)
+const previousChatMessageIds = ref(null)
 const isFetchingDepartmentStatuses = ref(false)
+const isFetchingChatNotifications = ref(false)
+const isFetchingStatusUpdateNotifications = ref(false)
 const hasLoadedTicketNotificationStats = ref(false)
 const ticketNotificationRef = ref(null)
 const apiBase = useRuntimeConfig().public.apiBase || 'http://localhost:8000/api'
@@ -34,8 +37,15 @@ const unreadTicketNotificationTotal = computed(() =>
   unreadTicketNotifications.value.rejected
 )
 const roleThreeNotificationTotal = computed(() =>
-  departmentStatusNotifications.value.length + departmentTicketWarnings.value.length
+  departmentStatusNotifications.value.length +
+  departmentTicketWarnings.value.length +
+  Object.keys(unreadChatNotifications.value).length
 )
+const unreadChatNotificationTotal = computed(() => Object.keys(unreadChatNotifications.value).length)
+const ticketNotificationTotal = computed(() => {
+  if (hasRole(['3'])) return roleThreeNotificationTotal.value
+  return unreadTicketNotificationTotal.value + unreadChatNotificationTotal.value + departmentStatusNotifications.value.length
+})
 
 const fetchTicketNotificationStats = async () => {
   const roleId = Number(user.value?.role_id)
@@ -45,44 +55,6 @@ const fetchTicketNotificationStats = async () => {
     if (isFetchingDepartmentStatuses.value) return
     isFetchingDepartmentStatuses.value = true
     try {
-      const response = await $fetch(`${apiBase}/tickets`, {
-        headers: {
-          Accept: 'application/json',
-          Authorization: `Bearer ${token.value}`
-        },
-        params: { per_page: 100 }
-      })
-      const tickets = response.data?.data?.data || response.data?.data || []
-      const currentStatuses = new Map(tickets.map(ticket => [Number(ticket.id), {
-        statusId: Number(ticket.status_id),
-        statusName: ticket.status?.name || 'Status berubah',
-        ticketNumber: ticket.nomor_tiket,
-        title: ticket.judul
-      }]))
-
-      if (previousDepartmentTicketStatuses.value) {
-        const changes = []
-        for (const [ticketId, current] of currentStatuses) {
-          const previous = previousDepartmentTicketStatuses.value.get(ticketId)
-          if (!previous || previous.statusId !== current.statusId) {
-            changes.push({
-              id: `${ticketId}-${current.statusId}-${Date.now()}`,
-              ticketNumber: current.ticketNumber,
-              title: current.title,
-              previousStatusName: previous?.statusName || 'Baru',
-              statusName: current.statusName,
-              statusId: current.statusId,
-              isNew: !previous
-            })
-          }
-        }
-        if (changes.length) {
-          departmentStatusNotifications.value = [...changes.reverse(), ...departmentStatusNotifications.value].slice(0, 20)
-        }
-      }
-
-      previousDepartmentTicketStatuses.value = currentStatuses
-
       const warningResponse = await $fetch(`${apiBase}/ticket-warnings`, {
         headers: {
           Accept: 'application/json',
@@ -124,15 +96,114 @@ const fetchTicketNotificationStats = async () => {
   }
 }
 
+const fetchStatusUpdateNotifications = async () => {
+  if (![1, 2, 3].includes(Number(user.value?.role_id)) || !token.value || isFetchingStatusUpdateNotifications.value) return
+
+  isFetchingStatusUpdateNotifications.value = true
+  try {
+    const response = await $fetch(`${apiBase}/ticket-status-notifications`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + token.value
+      }
+    })
+    departmentStatusNotifications.value = (response.data || []).map(notification => ({
+      id: notification.id,
+      ticketId: notification.ticket_id,
+      ticketNumber: notification.ticket?.nomor_tiket || '-',
+      title: notification.ticket?.judul || '-',
+      previousStatusName: notification.previous_status?.name || 'Status sebelumnya',
+      statusName: notification.status?.name || 'Status berubah',
+      statusId: Number(notification.status_id)
+    }))
+  } catch (error) {
+    console.error('Gagal memuat notifikasi perubahan status tiket:', error)
+  } finally {
+    isFetchingStatusUpdateNotifications.value = false
+  }
+}
+
+const fetchChatNotifications = async () => {
+  if (![1, 2, 3].includes(Number(user.value?.role_id)) || !token.value || isFetchingChatNotifications.value) return
+
+  isFetchingChatNotifications.value = true
+  try {
+    const response = await $fetch(`${apiBase}/tickets/chat-notifications`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + token.value,
+      }
+    })
+    const messages = response.data || []
+    const currentMessageIds = new Map(messages.map(message => [
+      Number(message.ticket_id),
+      Number(message.id)
+    ]))
+
+    if (previousChatMessageIds.value) {
+      for (const message of messages) {
+        const ticketId = Number(message.ticket_id)
+        const previousMessageId = previousChatMessageIds.value.get(ticketId)
+        if (previousMessageId === Number(message.id)) continue
+
+        if (Number(message.user_id) === Number(user.value?.id)) {
+          delete unreadChatNotifications.value[ticketId]
+        } else {
+          unreadChatNotifications.value[ticketId] = message
+        }
+      }
+    }
+
+    previousChatMessageIds.value = currentMessageIds
+  } catch (error) {
+    console.error('Gagal memuat notifikasi chat:', error)
+  } finally {
+    isFetchingChatNotifications.value = false
+  }
+}
+
 const openTicketsByStatus = (statusKey, statusId, search = '') => {
   if (statusKey) unreadTicketNotifications.value[statusKey] = 0
   isTicketNotificationOpen.value = false
   router.push({ path: '/admin/tickets', query: { status_id: statusId, search: search || undefined } })
 }
 
-const openDepartmentStatusNotification = (notification) => {
+const openChatNotifications = () => {
+  isTicketNotificationOpen.value = false
+  router.push({
+    path: '/admin/tickets',
+    query: { new_messages: '1' }
+  })
+}
+
+const openChatNotification = (notification) => {
+  isTicketNotificationOpen.value = false
+  router.push({
+    path: '/admin/tickets',
+    query: { new_messages: '1', search: notification.ticket?.nomor_tiket }
+  })
+}
+
+const openDepartmentStatusNotification = async (notification) => {
+  try {
+    await $fetch(`${apiBase}/ticket-status-notifications/${notification.id}/read`, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer ' + token.value
+      }
+    })
+  } catch (error) {
+    console.error('Gagal menandai notifikasi tiket sudah dibaca:', error)
+    return
+  }
+
   departmentStatusNotifications.value = departmentStatusNotifications.value.filter(item => item.id !== notification.id)
-  openTicketsByStatus(null, notification.statusId, notification.ticketNumber)
+  isTicketNotificationOpen.value = false
+  router.push({
+    path: '/admin/tickets',
+    query: { status_id: notification.statusId, search: notification.ticketNumber }
+  })
 }
 
 const openDepartmentWarningNotification = async (notification) => {
@@ -156,6 +227,8 @@ const openDepartmentWarningNotification = async (notification) => {
 }
 
 let ticketNotificationInterval = null
+let chatNotificationInterval = null
+let statusNotificationInterval = null
 
 // Menutup dropdown jika klik dilakukan di luar area menu
 const handleClickOutside = (event) => {
@@ -179,13 +252,22 @@ watch(() => route.path, () => {
 })
 
 watch(() => [user.value?.id, token.value], ([userId, currentToken]) => {
-  if (userId && currentToken) fetchTicketNotificationStats()
+  if (userId && currentToken) {
+    previousChatMessageIds.value = null
+    fetchTicketNotificationStats()
+    fetchChatNotifications()
+    fetchStatusUpdateNotifications()
+  }
 }, { immediate: true })
 
 onMounted(() => {
   fetchUser()
   fetchTicketNotificationStats()
+  fetchChatNotifications()
+  fetchStatusUpdateNotifications()
   ticketNotificationInterval = setInterval(fetchTicketNotificationStats, 30000)
+  chatNotificationInterval = setInterval(fetchChatNotifications, 7000)
+  statusNotificationInterval = setInterval(fetchStatusUpdateNotifications, 15000)
   document.addEventListener('click', handleClickOutside)
   
   // Buka sidebar secara default khusus tampilan Desktop
@@ -196,6 +278,8 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (ticketNotificationInterval) clearInterval(ticketNotificationInterval)
+  if (chatNotificationInterval) clearInterval(chatNotificationInterval)
+  if (statusNotificationInterval) clearInterval(statusNotificationInterval)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
@@ -238,8 +322,8 @@ onUnmounted(() => {
           <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 0 1-6 0v-1m6 0H9" />
           </svg>
-          <span v-if="(hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) > 0" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
-            {{ (hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) > 99 ? '99+' : (hasRole(['3']) ? roleThreeNotificationTotal : unreadTicketNotificationTotal) }}
+          <span v-if="ticketNotificationTotal > 0" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+            {{ ticketNotificationTotal > 99 ? '99+' : ticketNotificationTotal }}
           </span>
         </button>
 
@@ -248,6 +332,45 @@ onUnmounted(() => {
             <div class="border-b border-gray-100 px-4 py-3">
               <p class="text-sm font-bold text-gray-800">Notifikasi Tiket</p>
               <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Peringatan penanganan dan perubahan status tiket departemen Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
+            </div>
+            <div v-if="unreadChatNotificationTotal > 0" class="border-b border-gray-100 p-2">
+              <button
+                v-for="notification in Object.values(unreadChatNotifications).slice(0, 5)"
+                :key="notification.id"
+                type="button"
+                @click="openChatNotification(notification)"
+                class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-emerald-50"
+              >
+                <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500"></span>
+                <span class="min-w-0 flex-1">
+                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticket?.nomor_tiket }} · Pesan chat baru</span>
+                  <span class="mt-0.5 block truncate text-[11px] text-gray-600">{{ notification.user?.name || 'Pengguna' }}: {{ notification.message }}</span>
+                </span>
+              </button>
+              <button
+                type="button"
+                @click="openChatNotifications"
+                class="mt-1 flex w-full items-center justify-between rounded-lg bg-emerald-50 px-3 py-2 text-left text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              >
+                <span>Lihat tiket dengan pesan baru</span>
+                <span class="rounded-full bg-white px-2 py-0.5">{{ unreadChatNotificationTotal }}</span>
+              </button>
+            </div>
+            <div v-if="departmentStatusNotifications.length" class="max-h-64 overflow-y-auto border-b border-gray-100 p-2">
+              <p class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Perubahan status tiket</p>
+              <button
+                v-for="notification in departmentStatusNotifications"
+                :key="notification.id"
+                @click="openDepartmentStatusNotification(notification)"
+                class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50"
+              >
+                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.statusId === 4 ? 'bg-emerald-500' : notification.statusId === 5 ? 'bg-rose-500' : 'bg-indigo-500'"></span>
+                <span class="min-w-0 flex-1">
+                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticketNumber }} · {{ notification.statusName }}</span>
+                  <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
+                  <span class="mt-0.5 block text-[10px] text-gray-400">{{ notification.previousStatusName }} → {{ notification.statusName }}</span>
+                </span>
+              </button>
             </div>
             <div v-if="hasRole(['3'])" class="max-h-80 overflow-y-auto p-2">
               <button
@@ -261,19 +384,6 @@ onUnmounted(() => {
                   <span class="block text-xs font-semibold text-gray-800">{{ notification.ticket_number }} · {{ notification.is_overdue ? 'Melewati batas waktu' : 'Peringatan tiket' }}</span>
                   <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
                   <span class="mt-0.5 block text-[10px] text-gray-500">{{ notification.message }}</span>
-                </span>
-              </button>
-              <button
-                v-for="notification in departmentStatusNotifications"
-                :key="notification.id"
-                @click="openDepartmentStatusNotification(notification)"
-                class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50"
-              >
-                <span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="notification.statusId === 4 ? 'bg-emerald-500' : notification.statusId === 5 ? 'bg-rose-500' : 'bg-indigo-500'"></span>
-                <span class="min-w-0 flex-1">
-                  <span class="block text-xs font-semibold text-gray-800">{{ notification.ticketNumber }} · {{ notification.isNew && notification.statusId === 1 ? 'Tiket baru' : notification.statusName }}</span>
-                  <span class="mt-0.5 block truncate text-[11px] text-gray-500">{{ notification.title }}</span>
-                  <span class="mt-0.5 block text-[10px] text-gray-400">{{ notification.previousStatusName }} → {{ notification.statusName }}</span>
                 </span>
               </button>
               <p v-if="roleThreeNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada peringatan atau perubahan status baru.</p>
@@ -291,7 +401,7 @@ onUnmounted(() => {
                 <span class="flex items-center gap-2.5 text-sm font-medium text-gray-700"><span class="h-2 w-2 rounded-full bg-rose-500"></span>Reject</span>
                 <span class="rounded-full bg-rose-100 px-2 py-0.5 text-xs font-bold text-rose-700">{{ unreadTicketNotifications.rejected }}</span>
               </button>
-              <p v-if="unreadTicketNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada notifikasi baru.</p>
+              <p v-if="ticketNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada notifikasi baru.</p>
             </div>
           </div>
         </Transition>
@@ -430,7 +540,7 @@ onUnmounted(() => {
             <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Unit Kerja</span>
           </NuxtLink>
           <!-- 3.5. Category -->
-          <NuxtLink v-if="hasRole(['1','2'])"
+          <NuxtLink v-if="hasRole(['1','2','3'])"
             to="/admin/categories" 
             class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
             active-class="bg-blue-600 text-white hover:bg-blue-600"
