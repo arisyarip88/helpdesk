@@ -528,8 +528,7 @@ class TicketController extends Controller
         }
         // Role 3: Teknisi/Petugas Departemen (Melihat tiket sesuai departemennya)
         elseif ($roleId == 3) {
-            $query->whereHas('category', fn ($category) => $category->where('department_id', $departmentId))
-                ->where('status_id', '!=', 1);
+            $query->whereHas('category', fn ($category) => $category->where('department_id', $departmentId));
         }
 
         // Hitung total dan statistik per status_id dalam 1 query database

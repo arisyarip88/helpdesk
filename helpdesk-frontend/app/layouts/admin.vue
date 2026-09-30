@@ -37,6 +37,7 @@ const unreadTicketNotificationTotal = computed(() =>
   unreadTicketNotifications.value.rejected
 )
 const roleThreeNotificationTotal = computed(() =>
+  unreadTicketNotificationTotal.value +
   departmentStatusNotifications.value.length +
   departmentTicketWarnings.value.length +
   Object.keys(unreadChatNotifications.value).length
@@ -51,8 +52,7 @@ const fetchTicketNotificationStats = async () => {
   const roleId = Number(user.value?.role_id)
   if (![1, 2, 3].includes(roleId) || !token.value) return
 
-  if (roleId === 3) {
-    if (isFetchingDepartmentStatuses.value) return
+  if (roleId === 3 && !isFetchingDepartmentStatuses.value) {
     isFetchingDepartmentStatuses.value = true
     try {
       const warningResponse = await $fetch(`${apiBase}/ticket-warnings`, {
@@ -63,11 +63,10 @@ const fetchTicketNotificationStats = async () => {
       })
       departmentTicketWarnings.value = warningResponse.data || []
     } catch (error) {
-      console.error('Gagal memeriksa perubahan status departemen:', error)
+      console.error('Gagal memeriksa peringatan tiket departemen:', error)
     } finally {
       isFetchingDepartmentStatuses.value = false
     }
-    return
   }
 
   try {
@@ -331,7 +330,7 @@ onUnmounted(() => {
           <div v-if="isTicketNotificationOpen" class="absolute right-0 z-50 mt-2 w-[min(21rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
             <div class="border-b border-gray-100 px-4 py-3">
               <p class="text-sm font-bold text-gray-800">Notifikasi Tiket</p>
-              <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Peringatan penanganan dan perubahan status tiket departemen Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
+              <p class="mt-0.5 text-[11px] text-gray-500">{{ hasRole(['3']) ? 'Tiket baru, pesan, perubahan status, dan peringatan SLA unit Anda.' : 'Pilih kategori untuk melihat daftar tiket.' }}</p>
             </div>
             <div v-if="unreadChatNotificationTotal > 0" class="border-b border-gray-100 p-2">
               <button
@@ -374,6 +373,15 @@ onUnmounted(() => {
             </div>
             <div v-if="hasRole(['3'])" class="max-h-80 overflow-y-auto p-2">
               <button
+                v-if="unreadTicketNotifications.open > 0"
+                type="button"
+                @click="openTicketsByStatus('open', 1)"
+                class="mb-1 flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50"
+              >
+                <span class="flex items-center gap-2.5 text-sm font-medium text-gray-700"><span class="h-2 w-2 rounded-full bg-indigo-500"></span>Tiket Baru</span>
+                <span class="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-bold text-indigo-700">{{ unreadTicketNotifications.open }}</span>
+              </button>
+              <button
                 v-for="notification in departmentTicketWarnings"
                 :key="notification.id"
                 @click="openDepartmentWarningNotification(notification)"
@@ -386,7 +394,7 @@ onUnmounted(() => {
                   <span class="mt-0.5 block text-[10px] text-gray-500">{{ notification.message }}</span>
                 </span>
               </button>
-              <p v-if="roleThreeNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada peringatan atau perubahan status baru.</p>
+              <p v-if="roleThreeNotificationTotal === 0" class="px-3 py-5 text-center text-xs text-gray-500">Tidak ada notifikasi tiket baru.</p>
             </div>
             <div v-else class="p-2">
               <button v-if="unreadTicketNotifications.open > 0" @click="openTicketsByStatus('open', 1)" class="flex w-full items-center justify-between rounded-lg px-3 py-2.5 text-left transition hover:bg-indigo-50">

@@ -183,6 +183,26 @@ class TicketControllerTest extends TestCase
             ->assertJsonPath('data.data.0.id', 1);
     }
 
+    public function test_role_three_ticket_stats_include_new_tickets_from_its_department_only(): void
+    {
+        $this->createTicketListTables();
+        DB::table('categories')->insert(['id' => 2, 'name' => 'Unit lain', 'department_id' => 'D2']);
+        DB::table('tickets')->insert([
+            $this->ticketRow(1, 1, '2026-09-26 03:59:00'),
+            array_merge($this->ticketRow(2, 1, '2026-09-26 03:59:00'), ['category_id' => 2]),
+        ]);
+        $staff = new User;
+        $staff->id = 33;
+        $staff->role_id = 3;
+        $staff->department_id = 'D1';
+
+        $this->actingAs($staff, 'sanctum')
+            ->getJson('/api/tickets/stats')
+            ->assertOk()
+            ->assertJsonPath('data.open', 1)
+            ->assertJsonPath('data.total', 1);
+    }
+
     public function test_role_four_can_only_delete_the_latest_message_on_their_ticket(): void
     {
         $this->createTicketListTables();
