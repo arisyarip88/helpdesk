@@ -1066,7 +1066,7 @@ onUnmounted(() => {
               </td>
               <td class="px-6 py-4 text-right">
                 <div class="flex justify-end gap-2">
-                  <button
+                  <!-- <button
                     type="button"
                     :aria-label="`Buka chat tiket ${item.nomor_tiket}`"
                     :title="`Chat tiket ${item.nomor_tiket}`"
@@ -1080,7 +1080,7 @@ onUnmounted(() => {
                     <span v-if="unreadCounts[item.id] > 0" class="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[9px] font-bold text-white">
                       {{ unreadCounts[item.id] > 9 ? '9+' : unreadCounts[item.id] }}
                     </span>
-                  </button>
+                  </button> -->
                   <button
                     type="button"
                     :aria-label="`Lihat detail tiket ${item.nomor_tiket}`"
