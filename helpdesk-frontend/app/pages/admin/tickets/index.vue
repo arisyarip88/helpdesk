@@ -128,6 +128,18 @@ const updateQueryParams = () => {
   })
 }
 
+const toggleOverdueFilter = () => {
+  overdueOnly.value = !overdueOnly.value
+  if (overdueOnly.value) newMessagesOnly.value = false
+  currentPage.value = 1
+}
+
+const toggleNewMessagesFilter = () => {
+  newMessagesOnly.value = !newMessagesOnly.value
+  if (newMessagesOnly.value) overdueOnly.value = false
+  currentPage.value = 1
+}
+
 // --- 2. FETCH DATA UTAMA (Nuxt 4 Standard) ---
 const { data: responseData, pending, error, refresh } = await useAsyncData(
   'admin-tickets-list',
@@ -899,7 +911,7 @@ onMounted(() => {
           v-if="[1, 2, 3].includes(userRoleId)"
           type="button"
           :aria-pressed="overdueOnly"
-          @click="overdueOnly = !overdueOnly; currentPage = 1"
+          @click="toggleOverdueFilter"
           class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition"
           :class="overdueOnly ? 'border-rose-600 bg-rose-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-rose-300 hover:text-rose-700'"
         >
@@ -919,7 +931,7 @@ onMounted(() => {
           v-if="[1, 2, 3].includes(userRoleId)"
           type="button"
           :aria-pressed="newMessagesOnly"
-          @click="newMessagesOnly = !newMessagesOnly; currentPage = 1"
+          @click="toggleNewMessagesFilter"
           class="inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium transition"
           :class="newMessagesOnly ? 'border-emerald-600 bg-emerald-600 text-white' : 'border-slate-200 bg-white text-slate-700 hover:border-emerald-300 hover:text-emerald-700'"
         >

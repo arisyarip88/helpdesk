@@ -60,6 +60,7 @@ class TicketController extends Controller
             $overdueCount = (clone $query)
                 ->setEagerLoads([])
                 ->overdue($handlingSetting->max_hours)
+                ->whereNotIn('status_id', [4, 5])
                 ->count();
         }
 
@@ -93,7 +94,8 @@ class TicketController extends Controller
                 ['max_hours' => 24, 'alert_mode' => 'automatic']
             );
 
-            $query->overdue($handlingSetting->max_hours);
+            $query->overdue($handlingSetting->max_hours)
+                ->whereNotIn('status_id', [4, 5]);
         }
 
         $tickets = $query->latest()->paginate($perPage);
@@ -135,7 +137,7 @@ class TicketController extends Controller
         $user = $request->user();
         $roleId = (int) $user?->role_id;
 
-        abort_unless(in_array($roleId, [1, 2, 3], true), 403);
+        abort_unless(in_array($roleId, [1, 2, 3, 4], true), 403);
 
         $latestMessageIds = TicketMessage::query()
             ->selectRaw('MAX(id)')
@@ -148,6 +150,8 @@ class TicketController extends Controller
                     $query->whereHas('category', fn ($category) =>
                         $category->where('department_id', $user->department_id)
                     );
+                } elseif ($roleId === 4) {
+                    $query->where('user_id', $user->id);
                 }
             })
             ->with([

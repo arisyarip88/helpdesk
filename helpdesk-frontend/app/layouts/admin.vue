@@ -74,13 +74,21 @@ const fetchTicketNotificationStats = async () => {
       headers: {
         Accept: 'application/json',
         Authorization: `Bearer ${token.value}`
+      },
+      params: {
+        user_id: user.value?.id,
+        department_id: user.value?.department_id,
+        role_id: roleId
       }
     })
     const nextStats = response.data || response
     const statusKeys = ['open', 'complete', 'rejected']
 
     if (!hasLoadedTicketNotificationStats.value) {
-      unreadTicketNotifications.value = Object.fromEntries(statusKeys.map(key => [key, Number(nextStats[key]) || 0]))
+      unreadTicketNotifications.value = Object.fromEntries(statusKeys.map(key => [
+        key,
+        roleId === 3 ? 0 : Number(nextStats[key]) || 0
+      ]))
       hasLoadedTicketNotificationStats.value = true
     } else {
       for (const key of statusKeys) {
@@ -149,6 +157,12 @@ const fetchChatNotifications = async () => {
           delete unreadChatNotifications.value[ticketId]
         } else {
           unreadChatNotifications.value[ticketId] = message
+        }
+      }
+    } else {
+      for (const message of messages) {
+        if (Number(message.user_id) !== Number(user.value?.id)) {
+          unreadChatNotifications.value[Number(message.ticket_id)] = message
         }
       }
     }

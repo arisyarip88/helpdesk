@@ -77,7 +77,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/tickets/export/pdf', [TicketController::class, 'exportPdf']);
         Route::get('/tickets/export/excel', [TicketController::class, 'exportExcel']);
         Route::get('/tickets/chat-notifications', [TicketController::class, 'chatNotifications'])
-            ->middleware('role:1,2,3');
+            ->middleware('role:1,2,3,4');
         Route::apiResource('tickets', TicketController::class);
 
         // Ticket Messages / Chat

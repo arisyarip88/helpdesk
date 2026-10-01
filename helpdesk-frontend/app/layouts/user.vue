@@ -15,7 +15,10 @@ const dropdownRef = ref(null)
 const ticketNotificationRef = ref(null)
 const isTicketNotificationsOpen = ref(false)
 const ticketStatusNotifications = ref([])
+const unreadChatNotifications = ref({})
+const previousChatMessageIds = ref(null)
 const isFetchingTicketStatuses = ref(false)
+const isFetchingChatNotifications = ref(false)
 const apiBase = useRuntimeConfig().public.apiBase || 'http://localhost:8000/api'
 const router = useRouter()
 
@@ -46,6 +49,56 @@ const fetchTicketStatusChanges = async () => {
   } finally {
     isFetchingTicketStatuses.value = false
   }
+}
+
+const fetchChatNotifications = async () => {
+  if (Number(user.value?.role_id) !== 4 || !token.value || isFetchingChatNotifications.value) return
+
+  isFetchingChatNotifications.value = true
+  try {
+    const response = await $fetch(`${apiBase}/tickets/chat-notifications`, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${token.value}`
+      }
+    })
+    const messages = response.data || []
+    const currentMessageIds = new Map(messages.map(message => [
+      Number(message.ticket_id),
+      Number(message.id)
+    ]))
+
+    if (previousChatMessageIds.value) {
+      for (const message of messages) {
+        const ticketId = Number(message.ticket_id)
+        if (previousChatMessageIds.value.get(ticketId) === Number(message.id)) continue
+
+        if (Number(message.user_id) === Number(user.value?.id)) {
+          delete unreadChatNotifications.value[ticketId]
+        } else {
+          unreadChatNotifications.value[ticketId] = message
+        }
+      }
+    } else {
+      for (const message of messages) {
+        if (Number(message.user_id) !== Number(user.value?.id)) {
+          unreadChatNotifications.value[Number(message.ticket_id)] = message
+        }
+      }
+    }
+
+    previousChatMessageIds.value = currentMessageIds
+  } catch (error) {
+    console.error('Gagal memuat notifikasi pesan tiket:', error)
+  } finally {
+    isFetchingChatNotifications.value = false
+  }
+}
+
+const openChatNotification = (notification) => {
+  delete unreadChatNotifications.value[Number(notification.ticket_id)]
+  isTicketNotificationsOpen.value = false
+  router.push({ path: '/user', query: { search: notification.ticket?.nomor_tiket } })
 }
 
 const openStatusNotification = async (notification) => {
@@ -90,15 +143,22 @@ watch(() => route.path, () => {
 })
 
 watch(() => [user.value?.id, token.value], ([userId, authToken]) => {
-  if (userId && authToken) fetchTicketStatusChanges()
+  if (userId && authToken) {
+    previousChatMessageIds.value = null
+    fetchTicketStatusChanges()
+    fetchChatNotifications()
+  }
 }, { immediate: true })
 
 let ticketStatusPollInterval = null
+let chatNotificationPollInterval = null
 
 onMounted(() => {
   fetchUser()
   fetchTicketStatusChanges()
+  fetchChatNotifications()
   ticketStatusPollInterval = setInterval(fetchTicketStatusChanges, 15000)
+  chatNotificationPollInterval = setInterval(fetchChatNotifications, 7000)
   document.addEventListener('click', handleClickOutside)
   
   if (window.innerWidth >= 768) {
@@ -108,6 +168,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (ticketStatusPollInterval) clearInterval(ticketStatusPollInterval)
+  if (chatNotificationPollInterval) clearInterval(chatNotificationPollInterval)
   document.removeEventListener('click', handleClickOutside)
 })
 </script>
@@ -143,25 +204,42 @@ onUnmounted(() => {
             type="button"
             @click="isTicketNotificationsOpen = !isTicketNotificationsOpen; isDropdownOpen = false"
             :aria-expanded="isTicketNotificationsOpen"
-            aria-label="Notifikasi perubahan status tiket"
-            title="Notifikasi perubahan status tiket"
+            aria-label="Notifikasi tiket"
+            title="Notifikasi tiket"
             class="relative flex h-10 w-10 items-center justify-center rounded-xl p-2 text-slate-600 transition hover:bg-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 17h5l-1.4-1.4A2 2 0 0 1 18 14.2V11a6 6 0 0 0-4.5-5.8V4a1.5 1.5 0 0 0-3 0v1.2A6 6 0 0 0 6 11v3.2a2 2 0 0 1-.6 1.4L4 17h5m6 0v1a3 3 0 0 1-6 0v-1m6 0H9" />
             </svg>
-            <span v-if="ticketStatusNotifications.length" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
-              {{ ticketStatusNotifications.length > 99 ? '99+' : ticketStatusNotifications.length }}
+            <span v-if="ticketStatusNotifications.length + Object.keys(unreadChatNotifications).length" class="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-600 px-1 text-[9px] font-bold text-white">
+              {{ ticketStatusNotifications.length + Object.keys(unreadChatNotifications).length > 99 ? '99+' : ticketStatusNotifications.length + Object.keys(unreadChatNotifications).length }}
             </span>
           </button>
 
           <Transition enter-active-class="transition ease-out duration-100" enter-from-class="transform opacity-0 scale-95" enter-to-class="transform opacity-100 scale-100" leave-active-class="transition ease-in duration-75" leave-from-class="transform opacity-100 scale-100" leave-to-class="transform opacity-0 scale-95">
             <div v-if="isTicketNotificationsOpen" class="absolute right-0 top-full z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
               <div class="border-b border-slate-100 px-4 py-3">
-                <p class="text-sm font-bold text-slate-800">Perubahan Status Tiket</p>
+                <p class="text-sm font-bold text-slate-800">Notifikasi Tiket</p>
                 <p class="mt-0.5 text-[11px] text-slate-500">Klik notifikasi untuk melihat tiket.</p>
               </div>
+              <div v-if="Object.keys(unreadChatNotifications).length" class="max-h-64 overflow-y-auto border-b border-slate-100 p-2">
+                <p class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Pesan Baru</p>
+                <button
+                  v-for="notification in Object.values(unreadChatNotifications).slice(0, 5)"
+                  :key="notification.id"
+                  type="button"
+                  @click="openChatNotification(notification)"
+                  class="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-emerald-50"
+                >
+                  <span class="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-emerald-500"></span>
+                  <span class="min-w-0 flex-1">
+                    <span class="block text-xs font-semibold text-slate-800">{{ notification.ticket?.nomor_tiket || '-' }} · {{ notification.user?.name || 'Petugas' }}</span>
+                    <span class="mt-0.5 block truncate text-[11px] text-slate-500">{{ notification.message }}</span>
+                  </span>
+                </button>
+              </div>
               <div v-if="ticketStatusNotifications.length" class="max-h-80 overflow-y-auto p-2">
+                <p class="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">Perubahan Status</p>
                 <button
                   v-for="notification in ticketStatusNotifications"
                   :key="notification.id"
@@ -176,7 +254,7 @@ onUnmounted(() => {
                   <span class="shrink-0 text-[10px] text-slate-400">{{ new Date(notification.changedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) }}</span>
                 </button>
               </div>
-              <p v-else class="px-4 py-8 text-center text-xs text-slate-500">Belum ada perubahan status baru.</p>
+              <p v-if="!ticketStatusNotifications.length && !Object.keys(unreadChatNotifications).length" class="px-4 py-8 text-center text-xs text-slate-500">Belum ada notifikasi tiket baru.</p>
             </div>
           </Transition>
         </div>

@@ -117,10 +117,9 @@ class TicketControllerTest extends TestCase
         $this->actingAs($user, 'sanctum')
             ->getJson('/api/tickets?overdue=1&per_page=50')
             ->assertOk()
-            ->assertJsonPath('overdue_count', 2)
-            ->assertJsonCount(2, 'data.data')
-            ->assertJsonPath('data.data.0.nomor_tiket', 'TK-1')
-            ->assertJsonPath('data.data.1.nomor_tiket', 'TK-3');
+            ->assertJsonPath('overdue_count', 1)
+            ->assertJsonCount(1, 'data.data')
+            ->assertJsonPath('data.data.0.nomor_tiket', 'TK-1');
     }
 
     public function test_chat_notifications_return_latest_messages_within_role_three_department(): void
@@ -129,11 +128,13 @@ class TicketControllerTest extends TestCase
         DB::table('departments')->insert(['kode' => 'D2', 'nama' => 'Unit 2']);
         DB::table('categories')->insert(['id' => 2, 'name' => 'Lainnya', 'department_id' => 'D2']);
         DB::table('users')->insert([
+            ['id' => 1, 'name' => 'Admin utama', 'role_id' => 1, 'department_id' => null],
+            ['id' => 2, 'name' => 'Admin unit', 'role_id' => 2, 'department_id' => null],
             ['id' => 7, 'name' => 'Pelapor', 'role_id' => 4, 'department_id' => null],
             ['id' => 33, 'name' => 'Petugas', 'role_id' => 3, 'department_id' => 'D1'],
         ]);
         DB::table('tickets')->insert([
-            $this->ticketRow(1, 1, '2026-09-26 03:59:00'),
+            array_merge($this->ticketRow(1, 1, '2026-09-26 03:59:00'), ['user_id' => 7]),
             array_merge($this->ticketRow(2, 1, '2026-09-26 03:59:00'), ['category_id' => 2]),
         ]);
         DB::table('ticket_messages')->insert([
@@ -181,6 +182,27 @@ class TicketControllerTest extends TestCase
             ->assertOk()
             ->assertJsonCount(1, 'data.data')
             ->assertJsonPath('data.data.0.id', 1);
+
+        foreach ([1, 2] as $adminId) {
+            $admin = new User;
+            $admin->id = $adminId;
+            $admin->role_id = $adminId;
+
+            $this->actingAs($admin, 'sanctum')
+                ->getJson('/api/tickets/chat-notifications')
+                ->assertOk()
+                ->assertJsonCount(2, 'data');
+        }
+
+        $reporter = new User;
+        $reporter->id = 7;
+        $reporter->role_id = 4;
+
+        $this->actingAs($reporter, 'sanctum')
+            ->getJson('/api/tickets/chat-notifications')
+            ->assertOk()
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.ticket.id', 1);
     }
 
     public function test_role_three_ticket_stats_include_new_tickets_from_its_department_only(): void
