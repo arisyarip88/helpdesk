@@ -2,13 +2,16 @@
 definePageMeta({
   layout: 'admin',
   middleware: ['auth', 'role'],
-  roles: ['1','2']
+  roles: ['1','2','3']
 })
 
 // Configuration & Composable
 const config = useRuntimeConfig()
 const apiBase = config.public.apiBase || 'http://localhost:8000/api'
-const { token } = useAuth()
+const { token, hasRole } = useAuth()
+const isUnitStaff = computed(() => hasRole(['3']))
+const filterDepartment = ref('')
+const departments = ref([])
 const notify = useNotify()
 
 // State Search, Pagination & Per Page Limit
@@ -45,7 +48,8 @@ const form = ref({
   response_type: 'text', // 'text' atau 'options'
   answer: '',
   options: [], // [{ label: '', value: '', next_action: '' }]
-  is_active: true
+  is_active: true,
+  department_id: ''
 })
 
 // Helper Parse JSON Safe
@@ -83,13 +87,27 @@ const { data: apiResponse, pending, refresh, error } = await useAsyncData(
     query: {
       page: currentPage.value,
       per_page: perPage.value,
-      search: debouncedSearch.value
+      search: debouncedSearch.value,
+      department_id: filterDepartment.value || undefined
     }
   }),
   {
-    watch: [currentPage, perPage, debouncedSearch]
+    watch: [currentPage, perPage, debouncedSearch, filterDepartment]
   }
 )
+
+// Daftar unit hanya dibutuhkan role 1 & 2 (role 3 terkunci ke unitnya)
+if (!isUnitStaff.value) {
+  try {
+    const res = await $fetch(`${apiBase}/departments`, {
+      headers: { 'Accept': 'application/json', 'Authorization': `Bearer ${token.value}` },
+      query: { per_page: 100 }
+    })
+    departments.value = res.data || res
+  } catch (e) {
+    departments.value = []
+  }
+}
 
 // Computed Properties
 const knowledgeList = computed(() => {
@@ -131,7 +149,8 @@ const resetForm = () => {
     response_type: 'text',
     answer: '',
     options: [],
-    is_active: true
+    is_active: true,
+    department_id: ''
   }
   errorMessage.value = ''
 }
@@ -155,7 +174,8 @@ const openEditModal = (item) => {
     response_type: item.response_type || (parsedOptions.length > 0 ? 'options' : 'text'),
     answer: item.answer || '',
     options: parsedOptions.length > 0 ? parsedOptions : [],
-    is_active: Boolean(item.is_active)
+    is_active: Boolean(item.is_active),
+    department_id: item.department_id || ''
   }
   isModalOpen.value = true
 }
@@ -181,7 +201,8 @@ const handleSubmit = async () => {
     response_type: form.value.response_type,
     answer: form.value.answer,
     options: form.value.response_type === 'options' ? form.value.options : [],
-    is_active: form.value.is_active
+    is_active: form.value.is_active,
+    department_id: isUnitStaff.value ? undefined : (form.value.department_id || null)
   }
 
   try {
@@ -265,6 +286,15 @@ const handleDelete = async (id) => {
         />
       </div>
 
+      <select
+        v-if="!isUnitStaff"
+        v-model="filterDepartment"
+        class="bg-white border border-slate-200 text-slate-700 font-medium py-2 px-3 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer w-full sm:w-auto"
+      >
+        <option value="">Semua Unit</option>
+        <option v-for="d in departments" :key="d.kode" :value="d.kode">{{ d.nama }}</option>
+      </select>
+
       <div class="flex items-center gap-2 text-xs text-slate-500 self-end sm:self-auto shrink-0">
         <label for="per_page_select" class="font-medium">Tampilkan:</label>
         <select 
@@ -297,6 +327,7 @@ const handleDelete = async (id) => {
           <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-100">
             <tr>
               <th class="px-5 py-3">Topik / Pertanyaan</th>
+              <th class="px-5 py-3">Unit</th>
               <th class="px-5 py-3">Kata Kunci</th>
               <th class="px-5 py-3">Tipe & Jawaban AI</th>
               <th class="px-5 py-3">Status</th>
@@ -306,6 +337,11 @@ const handleDelete = async (id) => {
           <tbody class="divide-y divide-slate-100">
             <tr v-for="item in knowledgeList" :key="item.id" class="hover:bg-slate-50/50">
               <td class="px-5 py-3 font-semibold text-slate-800">{{ item.question }}</td>
+              <td class="px-5 py-3 text-xs">
+                <span class="px-2 py-0.5 rounded-md font-semibold" :class="item.department ? 'bg-indigo-50 text-indigo-700' : 'bg-slate-100 text-slate-500'">
+                  {{ item.department?.nama || 'Umum (Semua Unit)' }}
+                </span>
+              </td>
               <td class="px-5 py-3">
                 <div class="flex flex-wrap gap-1">
                   <span 
@@ -430,6 +466,14 @@ const handleDelete = async (id) => {
               placeholder="Contoh: Pengajuan Tiket Kendala" 
               class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none" 
             />
+          </div>
+
+          <div v-if="!isUnitStaff">
+            <label class="block text-xs font-bold text-slate-600 mb-1">Unit / Departemen</label>
+            <select v-model="form.department_id" class="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+              <option value="">Umum (Semua Unit)</option>
+              <option v-for="d in departments" :key="d.kode" :value="d.kode">{{ d.nama }}</option>
+            </select>
           </div>
 
           <div>

@@ -10,6 +10,42 @@ use Illuminate\Support\Facades\DB;
 
 class KnowledgeBaseController extends Controller
 {
+    private function isUnitStaff(Request $request): bool
+    {
+        return (int) $request->user()->role_id === 3;
+    }
+
+    // Role 3 hanya melihat knowledge milik unitnya sendiri
+    private function scopeToUser($query, Request $request): void
+    {
+        if ($this->isUnitStaff($request)) {
+            $query->where('department_id', $request->user()->department_id);
+        }
+    }
+
+    private function authorizeUnit(Request $request, KnowledgeBase $knowledgeBase): void
+    {
+        if ($this->isUnitStaff($request)) {
+            abort_unless(
+                $request->user()->department_id && $knowledgeBase->department_id === $request->user()->department_id,
+                403,
+                'Anda hanya dapat mengelola knowledge milik unit Anda.'
+            );
+        }
+    }
+
+    // Role 3 selalu dipaksa ke unitnya; role 1/2 bebas (null = umum)
+    private function resolveDepartment(Request $request, array $validated): ?string
+    {
+        if ($this->isUnitStaff($request)) {
+            abort_unless($request->user()->department_id, 422, 'Akun Anda belum terhubung ke unit/departemen.');
+
+            return $request->user()->department_id;
+        }
+
+        return $validated['department_id'] ?? null;
+    }
+
     /**
      * Tampilkan data pengetahuan dengan fitur Search, Pagination & Per Page
      */
@@ -18,14 +54,19 @@ class KnowledgeBaseController extends Controller
         $search = $request->input('search');
         $perPage = (int) $request->input('per_page', 10);
 
-        $query = KnowledgeBase::query();
+        $query = KnowledgeBase::query()->with('department:kode,nama');
+        $this->scopeToUser($query, $request);
+
+        if ($request->filled('department_id') && ! $this->isUnitStaff($request)) {
+            $query->where('department_id', $request->input('department_id'));
+        }
 
         // Fitur Pencarian berdasarkan Question, Answer, atau Keywords
-        if (!empty($search)) {
+        if (! empty($search)) {
             $query->where(function ($q) use ($search) {
                 $q->where('question', 'LIKE', "%{$search}%")
-                  ->orWhere('answer', 'LIKE', "%{$search}%")
-                  ->orWhere('keywords', 'LIKE', "%{$search}%");
+                    ->orWhere('answer', 'LIKE', "%{$search}%")
+                    ->orWhere('keywords', 'LIKE', "%{$search}%");
             });
         }
 
@@ -37,10 +78,13 @@ class KnowledgeBaseController extends Controller
     /**
      * Tampilkan detail data pengetahuan berdasarkan ID
      */
-    public function show(KnowledgeBase $knowledgeBase)
+    public function show(Request $request, KnowledgeBase $knowledgeBase)
     {
+        $this->authorizeUnit($request, $knowledgeBase);
+        $knowledgeBase->load('department:kode,nama');
+
         return response()->json([
-            'data' => $knowledgeBase
+            'data' => $knowledgeBase,
         ], 200);
     }
 
@@ -52,28 +96,31 @@ class KnowledgeBaseController extends Controller
         // Konversi string pisah koma pada keywords menjadi array jika dikirim berupa string
         if (is_string($request->keywords)) {
             $request->merge([
-                'keywords' => array_values(array_filter(array_map('trim', explode(',', $request->keywords))))
+                'keywords' => array_values(array_filter(array_map('trim', explode(',', $request->keywords)))),
             ]);
         }
 
         // Konversi options jika terkirim berupa string JSON dari frontend
         if (is_string($request->options)) {
             $request->merge([
-                'options' => json_decode($request->options, true) ?? []
+                'options' => json_decode($request->options, true) ?? [],
             ]);
         }
 
         $validated = $request->validate([
-            'question'      => 'required|string|max:255',
-            'keywords'      => 'required|array|min:1',
-            'keywords.*'    => 'string',
+            'question' => 'required|string|max:255',
+            'keywords' => 'required|array|min:1',
+            'keywords.*' => 'string',
             'response_type' => 'nullable|in:text,options',
-            'answer'        => 'required|string',
-            'options'       => 'nullable|array',
+            'answer' => 'required|string',
+            'options' => 'nullable|array',
             'options.*.label' => 'required_with:options|string',
             'options.*.value' => 'required_with:options|string',
-            'is_active'     => 'boolean',
+            'is_active' => 'boolean',
+            'department_id' => 'nullable|exists:departments,kode',
         ]);
+
+        $validated['department_id'] = $this->resolveDepartment($request, $validated);
 
         // Default response_type jika kosong
         $validated['response_type'] = $validated['response_type'] ?? 'text';
@@ -82,7 +129,7 @@ class KnowledgeBaseController extends Controller
 
         return response()->json([
             'message' => 'Pengetahuan berhasil ditambahkan',
-            'data'    => $kb
+            'data' => $kb,
         ], 201);
     }
 
@@ -93,27 +140,31 @@ class KnowledgeBaseController extends Controller
     {
         if (is_string($request->keywords)) {
             $request->merge([
-                'keywords' => array_values(array_filter(array_map('trim', explode(',', $request->keywords))))
+                'keywords' => array_values(array_filter(array_map('trim', explode(',', $request->keywords)))),
             ]);
         }
 
         if (is_string($request->options)) {
             $request->merge([
-                'options' => json_decode($request->options, true) ?? []
+                'options' => json_decode($request->options, true) ?? [],
             ]);
         }
 
         $validated = $request->validate([
-            'question'      => 'required|string|max:255',
-            'keywords'      => 'required|array|min:1',
-            'keywords.*'    => 'string',
+            'question' => 'required|string|max:255',
+            'keywords' => 'required|array|min:1',
+            'keywords.*' => 'string',
             'response_type' => 'nullable|in:text,options',
-            'answer'        => 'required|string',
-            'options'       => 'nullable|array',
+            'answer' => 'required|string',
+            'options' => 'nullable|array',
             'options.*.label' => 'required_with:options|string',
             'options.*.value' => 'required_with:options|string',
-            'is_active'     => 'boolean',
+            'is_active' => 'boolean',
+            'department_id' => 'nullable|exists:departments,kode',
         ]);
+
+        $this->authorizeUnit($request, $knowledgeBase);
+        $validated['department_id'] = $this->resolveDepartment($request, $validated);
 
         // Jika response_type diset ke text, kosongkan opsi pilihan
         if (($validated['response_type'] ?? 'text') === 'text') {
@@ -124,29 +175,31 @@ class KnowledgeBaseController extends Controller
 
         return response()->json([
             'message' => 'Pengetahuan berhasil diperbarui',
-            'data'    => $knowledgeBase
+            'data' => $knowledgeBase,
         ], 200);
     }
 
     /**
      * Hapus data pengetahuan
      */
-    public function destroy(KnowledgeBase $knowledgeBase)
+    public function destroy(Request $request, KnowledgeBase $knowledgeBase)
     {
+        $this->authorizeUnit($request, $knowledgeBase);
+
         UnansweredChatQuestion::where('knowledge_base_id', $knowledgeBase->id)
             ->update(['knowledge_base_id' => null, 'resolved_at' => null]);
 
         $knowledgeBase->delete();
 
         return response()->json([
-            'message' => 'Pengetahuan berhasil dihapus'
+            'message' => 'Pengetahuan berhasil dihapus',
         ], 200);
     }
 
     public function unanswered(Request $request)
     {
         $questions = UnansweredChatQuestion::whereNull('resolved_at')
-            ->when($request->filled('search'), fn ($query) => $query->where('question', 'like', '%' . $request->input('search') . '%'))
+            ->when($request->filled('search'), fn ($query) => $query->where('question', 'like', '%'.$request->input('search').'%'))
             ->latest('last_asked_at')
             ->paginate(20);
 
@@ -216,16 +269,16 @@ class KnowledgeBaseController extends Controller
 
             if (is_array($keywords)) {
                 foreach ($keywords as $keyword) {
-                    if (!empty($keyword) && str_contains($userMessage, strtolower($keyword))) {
-                        
+                    if (! empty($keyword) && str_contains($userMessage, strtolower($keyword))) {
+
                         // Parse options jika berupa string JSON di DB
                         $options = is_string($kb->options) ? json_decode($kb->options, true) : ($kb->options ?? []);
 
                         return response()->json([
-                            'found'         => true,
-                            'answer'        => $kb->answer,
+                            'found' => true,
+                            'answer' => $kb->answer,
                             'response_type' => $kb->response_type ?? 'text',
-                            'options'       => $kb->response_type === 'options' ? $options : []
+                            'options' => $kb->response_type === 'options' ? $options : [],
                         ], 200);
                     }
                 }
@@ -239,7 +292,7 @@ class KnowledgeBaseController extends Controller
         $questionHash = hash('sha256', $normalizedQuestion ?: mb_strtolower($question));
 
         $unansweredQuestion = UnansweredChatQuestion::firstOrNew(['question_hash' => $questionHash]);
-        if (!$unansweredQuestion->exists) {
+        if (! $unansweredQuestion->exists) {
             $unansweredQuestion->question = $question;
             $unansweredQuestion->occurrences = 0;
         } elseif ($unansweredQuestion->resolved_at) {
@@ -252,14 +305,14 @@ class KnowledgeBaseController extends Controller
 
         // Jawaban default jika tidak ada kata kunci yang cocok
         return response()->json([
-            'found'         => false,
-            'answer'        => "Maaf, saya belum menemukan jawaban terkait pertanyaan Anda. Silakan pilih menu di bawah ini atau hubungi Admin Helpdesk.",
+            'found' => false,
+            'answer' => 'Maaf, saya belum menemukan jawaban terkait pertanyaan Anda. Silakan pilih menu di bawah ini atau hubungi Admin Helpdesk.',
             'response_type' => 'options',
-            'options'       => [
+            'options' => [
                 ['label' => 'Cara buat tiket baru?', 'value' => 'buat_tiket'],
                 ['label' => 'Lupa password akun', 'value' => 'lupa_password'],
-                ['label' => 'Jam operasional layanan', 'value' => 'jam_operasional']
-            ]
+                ['label' => 'Jam operasional layanan', 'value' => 'jam_operasional'],
+            ],
         ], 200);
     }
 }

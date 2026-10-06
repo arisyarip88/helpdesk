@@ -36,10 +36,13 @@ return [
     ],
 
     'b2b_primary' => [
-    'url'     => env('B2B_PRIMARY_URL', 'https://devhrms.sasmitagroup.org/api/v2/login-penugasan'),
-    'api_key' => env('B2B_PRIMARY_API_KEY', '3ScAWtoIWsm5BjE7gtrkcGlIlQWX5zU2J9KjgQzb6v8rv2JEr7P4kHDHbtfzdSFVjR3Bia6y66afMjxFEI16Iiq8dT8PfzEG'),
-
-
+        'url' => env('B2B_PRIMARY_URL', 'https://devhrms.sasmitagroup.org/api/v2/login-penugasan'),
+        'api_key' => env('B2B_PRIMARY_API_KEY', '3ScAWtoIWsm5BjE7gtrkcGlIlQWX5zU2J9KjgQzb6v8rv2JEr7P4kHDHbtfzdSFVjR3Bia6y66afMjxFEI16Iiq8dT8PfzEG'),
     ],
 
+    'sso' => [
+        'base_url' => env('SSO_BASE_URL', 'https://devsso.unpam.ac.id'),
+        'domain' => env('SSO_APP_DOMAIN', 'devhelpdesk.unpam.ac.id'),
+        'frontend_url' => env('FRONTEND_URL', 'http://localhost:3000'),
+    ],
 ];

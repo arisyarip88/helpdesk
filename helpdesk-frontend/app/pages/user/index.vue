@@ -416,9 +416,7 @@ const lastMessageCounts = ref({})
 const latestAdminMessages = ref({})
 const adminRoleIds = new Set([1, 2, 3])
 
-let chatInterval = null
-let globalPollInterval = null
-let ticketStatusRefreshInterval = null
+const { tick: ticketChangeTick } = useTicketChanges()
 
 const updateLatestAdminMessage = (ticketId, messages) => {
   const latestMessage = [...messages].reverse().find(message =>
@@ -452,10 +450,6 @@ const openChatModal = async (ticket) => {
   unreadCounts.value[ticket.id] = 0
 
   await fetchMessages()
-
-  chatInterval = setInterval(() => {
-    fetchMessages(true)
-  }, 3000)
 }
 
 const openTicketRating = (ticket) => {
@@ -472,11 +466,6 @@ const closeChatModal = () => {
   selectedTicket.value = null
   chatMessages.value = []
   newMessage.value = ''
-
-  if (chatInterval) {
-    clearInterval(chatInterval)
-    chatInterval = null
-  }
 
   openTicketRating(closedTicket)
 }
@@ -603,18 +592,16 @@ const checkGlobalUnreadMessages = async () => {
 
 onMounted(() => {
   void checkGlobalUnreadMessages()
-  globalPollInterval = setInterval(() => {
-    checkGlobalUnreadMessages()
-  }, 7000)
-  ticketStatusRefreshInterval = setInterval(() => {
-    Promise.all([refresh(), refreshStats()])
-  }, 15000)
 })
 
-onUnmounted(() => {
-  if (chatInterval) clearInterval(chatInterval)
-  if (globalPollInterval) clearInterval(globalPollInterval)
-  if (ticketStatusRefreshInterval) clearInterval(ticketStatusRefreshInterval)
+// Muat ulang hanya ketika ada perubahan dari server (tiket, pesan, atau status)
+watch(ticketChangeTick, async () => {
+  await Promise.all([refresh(), refreshStats()])
+  if (isChatModalOpen.value) {
+    fetchMessages(true)
+  } else {
+    checkGlobalUnreadMessages()
+  }
 })
 
 

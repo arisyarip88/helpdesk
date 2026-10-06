@@ -587,6 +587,18 @@ onUnmounted(() => {
 
           <NuxtLink
             v-if="hasRole(['1','2'])"
+            to="/admin/public-complaints"
+            class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
+            active-class="bg-blue-600 text-white hover:bg-blue-600"
+          >
+            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-9 8l3-3h11a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v14z" />
+            </svg>
+            <span :class="{'md:hidden': !isSidebarOpen}" class="whitespace-nowrap font-medium text-sm">Aduan Umum</span>
+          </NuxtLink>
+
+          <NuxtLink
+            v-if="hasRole(['1','2'])"
             to="/admin/settings/handling-time"
             class="flex items-center space-x-3 px-3 py-2.5 rounded-lg hover:bg-gray-800 hover:text-white transition-colors"
             active-class="bg-blue-600 text-white hover:bg-blue-600"
@@ -598,7 +610,7 @@ onUnmounted(() => {
           </NuxtLink>
 
           <!-- 5. Knowledge Base -->
-          <div v-if="hasRole(['1','2'])">
+          <div v-if="hasRole(['1','2','3'])">
             <button
               type="button"
               @click="isKnowledgeMenuOpen = !isKnowledgeMenuOpen"
@@ -620,7 +632,7 @@ onUnmounted(() => {
               <NuxtLink to="/admin/knowledge-base" class="block rounded-lg px-3 py-2 text-xs font-medium text-slate-300 hover:bg-gray-800 hover:text-white" exact-active-class="bg-gray-800 text-white">
                 Daftar Knowledge
               </NuxtLink>
-              <NuxtLink to="/admin/knowledge-base/unanswered" class="block rounded-lg px-3 py-2 text-xs font-medium text-slate-300 hover:bg-gray-800 hover:text-white" active-class="bg-gray-800 text-white">
+              <NuxtLink v-if="hasRole(['1','2'])" to="/admin/knowledge-base/unanswered" class="block rounded-lg px-3 py-2 text-xs font-medium text-slate-300 hover:bg-gray-800 hover:text-white" active-class="bg-gray-800 text-white">
                 Belum Terjawab
               </NuxtLink>
             </div>

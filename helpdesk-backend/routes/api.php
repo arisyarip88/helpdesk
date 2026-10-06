@@ -5,6 +5,7 @@ use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\DashboardController;
 use App\Http\Controllers\Api\DepartmentController;
 use App\Http\Controllers\Api\KnowledgeBaseController;
+use App\Http\Controllers\Api\PublicComplaintController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\TicketAlertController;
 use App\Http\Controllers\Api\TicketAnalyticsController;
@@ -22,13 +23,30 @@ use Illuminate\Support\Facades\Route;
 // Endpoint Publik
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
+
+// SSO UNPAM (sesuai panduan integrasi sso.pdf)
+Route::get('/sso/url', [AuthController::class, 'ssoUrl']);
+Route::get('/loginsso', [AuthController::class, 'handleSsoCallback']);
+Route::post('/loginsso', [AuthController::class, 'loginSso']);
 Route::post('/loginSso', [AuthController::class, 'loginSso']);
 
 // Endpoint Chatbot Landing Page
 Route::post('/chatbot/ask', [KnowledgeBaseController::class, 'searchAnswer'])->middleware('throttle:60,1');
+Route::get('/public/categories', [PublicComplaintController::class, 'categories']);
+Route::get('/public/complaints/captcha', [PublicComplaintController::class, 'captcha'])->middleware('throttle:30,1');
+Route::post('/public/complaints', [PublicComplaintController::class, 'store'])->middleware('throttle:5,1');
 
 // Protected Routes (Sanctum Authenticated)
 Route::middleware('auth:sanctum')->group(function () {
+
+    Route::middleware('role:1,2')->prefix('admin/public-complaints')->group(function () {
+        Route::get('/', [PublicComplaintController::class, 'index']);
+        Route::post('/', [PublicComplaintController::class, 'adminStore']);
+        Route::get('/{complaint}/attachment', [PublicComplaintController::class, 'downloadAttachment']);
+        Route::get('/{complaint}', [PublicComplaintController::class, 'show']);
+        Route::put('/{complaint}', [PublicComplaintController::class, 'update']);
+        Route::delete('/{complaint}', [PublicComplaintController::class, 'destroy']);
+    });
 
     // Auth & Profile Routes
     Route::get('/profile', [AuthController::class, 'profile']);
@@ -67,15 +85,18 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::get('/knowledge-base/unanswered', [KnowledgeBaseController::class, 'unanswered']);
         Route::post('/knowledge-base/unanswered/{question}/knowledge', [KnowledgeBaseController::class, 'convertUnanswered']);
         Route::delete('/knowledge-base/unanswered/{question}', [KnowledgeBaseController::class, 'destroyUnanswered']);
-        Route::apiResource('knowledge-base', KnowledgeBaseController::class);
+
     });
 
     // Role 1, 2, 3, 4 (Akses Tiket, Kategori, & Chat)
+    Route::middleware('role:1,2,3')->apiResource('knowledge-base', KnowledgeBaseController::class);
     Route::middleware('role:1,2,3,4')->group(function () {
         // Tickets & Bulk Status
         Route::post('/tickets/bulk-status', [TicketController::class, 'bulkUpdateStatus']);
         Route::get('/tickets/export/pdf', [TicketController::class, 'exportPdf']);
         Route::get('/tickets/export/excel', [TicketController::class, 'exportExcel']);
+        Route::get('/tickets/changes', [TicketController::class, 'changes'])
+            ->middleware('role:1,2,3,4');
         Route::get('/tickets/chat-notifications', [TicketController::class, 'chatNotifications'])
             ->middleware('role:1,2,3,4');
         Route::apiResource('tickets', TicketController::class);

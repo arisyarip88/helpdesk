@@ -150,15 +150,19 @@ watch(() => [user.value?.id, token.value], ([userId, authToken]) => {
   }
 }, { immediate: true })
 
-let ticketStatusPollInterval = null
-let chatNotificationPollInterval = null
+const { tick: ticketChangeTick, start: startTicketChanges, stop: stopTicketChanges } = useTicketChanges()
+
+// Notifikasi dimuat ulang hanya ketika server melaporkan ada perubahan
+watch(ticketChangeTick, () => {
+  fetchTicketStatusChanges()
+  fetchChatNotifications()
+})
 
 onMounted(() => {
   fetchUser()
   fetchTicketStatusChanges()
   fetchChatNotifications()
-  ticketStatusPollInterval = setInterval(fetchTicketStatusChanges, 15000)
-  chatNotificationPollInterval = setInterval(fetchChatNotifications, 7000)
+  startTicketChanges()
   document.addEventListener('click', handleClickOutside)
   
   if (window.innerWidth >= 768) {
@@ -167,8 +171,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (ticketStatusPollInterval) clearInterval(ticketStatusPollInterval)
-  if (chatNotificationPollInterval) clearInterval(chatNotificationPollInterval)
+  stopTicketChanges()
   document.removeEventListener('click', handleClickOutside)
 })
 </script>

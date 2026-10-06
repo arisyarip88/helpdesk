@@ -18,14 +18,20 @@ class KnowledgeBase extends Model
         'answer',
         'options',
         'is_active',
+        'department_id',
     ];
 
     /**
      * Konversi tipe data otomatis (Array PHP <-> JSON MySQL)
      */
     protected $casts = [
-        'keywords'  => 'array',
-        'options'   => 'array',
+        'keywords' => 'array',
+        'options' => 'array',
         'is_active' => 'boolean',
     ];
+
+    public function department()
+    {
+        return $this->belongsTo(Department::class, 'department_id', 'kode');
+    }
 }

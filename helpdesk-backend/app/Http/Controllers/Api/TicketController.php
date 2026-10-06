@@ -8,9 +8,9 @@ use App\Models\Category;
 use App\Models\Department;
 use App\Models\Status;
 use App\Models\Ticket;
+use App\Models\TicketHandlingSetting;
 use App\Models\TicketMessage;
 use App\Models\TicketStatusNotification;
-use App\Models\TicketHandlingSetting;
 use App\Models\User;
 use Barryvdh\DomPDF\Facade\Pdf;
 use Illuminate\Http\Request;
@@ -43,9 +43,8 @@ class TicketController extends Controller
             $query->where('user_id', $user ? $user->id : $request->input('user_id'));
         } elseif ($roleId == 3) {
             // Role 3 selalu dibatasi ke departemen user, bukan nilai dari request.
-            $query->whereHas('category', fn ($category) => $category->where('department_id', $user?->department_id))
-                // ->where('status_id', '!=', 1)
-                ;
+            $query->whereHas('category', fn ($category) => $category->where('department_id', $user?->department_id));
+            // ->where('status_id', '!=', 1)
         } elseif (in_array((int) $roleId, [1, 2], true) && $request->filled('department_id')) {
             $query->whereHas('category', fn ($category) => $category->where('department_id', $departmentId));
         }
@@ -105,8 +104,7 @@ class TicketController extends Controller
         if ($roleId == 4) {
             $statusCountsQuery->where('user_id', $user ? $user->id : $request->input('user_id'));
         } elseif ($roleId == 3) {
-            $statusCountsQuery->whereHas('category', fn ($category) => $category->where('department_id', $user?->department_id))
-                ;
+            $statusCountsQuery->whereHas('category', fn ($category) => $category->where('department_id', $user?->department_id));
         } elseif ($request->filled('department_id')) {
             $statusCountsQuery->whereHas('category', fn ($category) => $category->where('department_id', $departmentId));
         }
@@ -132,6 +130,47 @@ class TicketController extends Controller
         ]);
     }
 
+    // Penanda ringan: berubah hanya ketika tiket, pesan, atau notifikasi status berubah
+    public function changes(Request $request)
+    {
+        $user = $request->user();
+        $roleId = (int) $user?->role_id;
+
+        abort_unless(in_array($roleId, [1, 2, 3, 4], true), 403);
+
+        $scopeTicket = function ($query) use ($roleId, $user) {
+            if ($roleId === 3) {
+                $query->whereHas('category', fn ($category) => $category->where('department_id', $user->department_id)
+                );
+            } elseif ($roleId === 4) {
+                $query->where('user_id', $user->id);
+            }
+        };
+
+        $tickets = Ticket::query()->tap($scopeTicket)
+            ->selectRaw('COUNT(*) as total, MAX(updated_at) as latest')
+            ->first();
+
+        $messages = TicketMessage::query()
+            ->whereHas('ticket', $scopeTicket)
+            ->selectRaw('COUNT(*) as total, MAX(id) as latest')
+            ->first();
+
+        $statuses = TicketStatusNotification::query()
+            ->where('recipient_id', $user->id)
+            ->whereNull('read_at')
+            ->selectRaw('COUNT(*) as total, MAX(id) as latest')
+            ->first();
+
+        return response()->json([
+            'signature' => md5(json_encode([
+                $tickets->total, $tickets->latest,
+                $messages->total, $messages->latest,
+                $statuses->total, $statuses->latest,
+            ])),
+        ]);
+    }
+
     public function chatNotifications(Request $request)
     {
         $user = $request->user();
@@ -147,8 +186,7 @@ class TicketController extends Controller
             ->whereIn('ticket_messages.id', $latestMessageIds)
             ->whereHas('ticket', function ($query) use ($roleId, $user) {
                 if ($roleId === 3) {
-                    $query->whereHas('category', fn ($category) =>
-                        $category->where('department_id', $user->department_id)
+                    $query->whereHas('category', fn ($category) => $category->where('department_id', $user->department_id)
                     );
                 } elseif ($roleId === 4) {
                     $query->where('user_id', $user->id);

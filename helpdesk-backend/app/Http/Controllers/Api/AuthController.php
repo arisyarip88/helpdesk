@@ -4,29 +4,24 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
-use App\Models\Role;
-use App\Models\Status;
-use App\Models\Department;
-use Illuminate\Http\Request;
+use App\Services\SsoService;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Http;
-use Illuminate\Support\Facades\Auth;
-
-
-
-
-
 
 class AuthController extends Controller
 {
+    public function __construct(
+        protected SsoService $ssoService
+    ) {}
+
     /**
      * Login langsung menggunakan Database Lokal.
      */
-    public function login(Request $request)
+    public function login(Request $request): JsonResponse
     {
-        // 1. Validasi Input Username & Password
         $validator = Validator::make($request->all(), [
             'username' => 'required|string',
             'password' => 'required|string',
@@ -34,293 +29,249 @@ class AuthController extends Controller
 
         if ($validator->fails()) {
             return response()->json([
-                'status'  => 'error',
+                'status' => 'error',
                 'message' => 'Validasi gagal',
-                'errors'  => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
-        // 2. Cari User Langsung di Database Lokal
         $user = User::where('username', $request->username)->first();
 
-        // 3. Cek Keberadaan User & Match Password
-        if (!$user || !Hash::check($request->password, $user->password)) {
+        if (! $user || ! Hash::check($request->password, $user->password)) {
             return response()->json([
-                'status'  => 'error',
-                'message' => 'Username atau password salah pada database lokal'
+                'status' => 'error',
+                'message' => 'Username atau password salah pada database lokal',
             ], 401);
         }
 
-        // 4. Load Relasi Role & Department
-        $user->load(['role', 'department']);
-
-        // 5. Generate Bearer Token Sanctum
-        $token = $user->createToken('auth_token')->plainTextToken;
-
-        // 6. Response Success
-        return response()->json([
-            'status'       => 'success',
-            'message'      => 'Login database lokal berhasil',
-            'data'         => $user,
-            'access_token' => $token,
-            'token_type'   => 'Bearer'
-        ], 200);
+        return $this->respondWithToken($user, 'Login database lokal berhasil');
     }
 
     /**
      * Logout & Revoke Token
      */
-    public function logout(Request $request)
+    public function logout(Request $request): JsonResponse
     {
         $request->user()->currentAccessToken()->delete();
 
         return response()->json([
-            'status'  => 'success',
-            'message' => 'Logout berhasil'
+            'status' => 'success',
+            'message' => 'Logout berhasil',
         ], 200);
     }
 
     /**
      * Get Current Authenticated User Data
      */
-    public function profile(Request $request)
+    public function profile(Request $request): JsonResponse
     {
         return response()->json([
             'status' => 'success',
-            'data'   => $request->user()->load(['role', 'department'])
+            'data' => $request->user()->load(['role', 'department']),
         ], 200);
     }
 
-    public function me(Request $request)
+    public function me(Request $request): JsonResponse
     {
         $user = $request->user()->load('role');
 
         return response()->json([
-           
             'user' => $user,
-            'role' => $user->role ? $user->role->name : null, // Mengambil 'name' dari tabel roles (misal: 'admin')
+            'role' => $user->role ? $user->role->name : null,
         ]);
     }
 
+    /**
+     * Mendapatkan URL SSO login untuk redirect browser.
+     */
+    public function ssoUrl(Request $request): JsonResponse
+    {
+        $domain = $request->query('domain');
+        $url = $this->ssoService->getLoginUrl($domain);
 
+        return response()->json([
+            'status' => 'success',
+            'url' => $url,
+        ]);
+    }
 
-    //LOGIN SSO
+    /**
+     * Callback SSO yang dipanggil browser setelah login di satu.unpam.ac.id
+     * GET /api/loginsso?token=<JWT>
+     */
+    public function handleSsoCallback(Request $request): JsonResponse|RedirectResponse
+    {
+        $token = $request->query('token');
+        $frontendUrl = config('services.sso.frontend_url', 'http://localhost:3000');
+
+        if (empty($token) || ! is_string($token)) {
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'Callback SSO tidak lengkap (parameter token tidak ditemukan)',
+                ], 400);
+            }
+
+            return redirect()->away($frontendUrl.'/?error=sso_missing_token')
+                ->header('Referrer-Policy', 'no-referrer');
+        }
+
+        $result = $this->ssoService->verifyToken($token);
+
+        if (! $result['success']) {
+            if ($request->wantsJson()) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $result['message'] ?? 'Verifikasi SSO gagal',
+                ], $result['status'] ?? 401);
+            }
+
+            $errorCode = ($result['status'] === 401) ? 'sso_unauthorized' : 'sso_server_error';
+
+            return redirect()->away($frontendUrl.'/?error='.$errorCode)
+                ->header('Referrer-Policy', 'no-referrer');
+        }
+
+        // Simpan data profil (username, password, nama, tlp, email, kode unit) ke DB lokal
+        $user = $this->ssoService->syncUserFromSso($result['data']);
+        $user->load(['role', 'department']);
+
+        // Buat access token lokal Sanctum
+        $localToken = $user->createToken('auth_token')->plainTextToken;
+
+        if ($request->wantsJson()) {
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Login SSO berhasil',
+                'access_token' => $localToken,
+                'token_type' => 'Bearer',
+                'data' => $user,
+            ], 200);
+        }
+
+        // Arahkan ke callback frontend dengan URL bersih dari JWT SSO
+        $redirectUrl = $frontendUrl.'/auth/sso-callback?token='.urlencode($localToken).'&role='.($user->role_id ?? 4);
+
+        return redirect()->away($redirectUrl)
+            ->header('Referrer-Policy', 'no-referrer');
+    }
+
+    /**
+     * Login SSO via API (bisa menerima JWT token dari frontend atau username/password sandbox/lokal).
+     * POST /api/loginsso atau POST /api/loginSso
+     */
     public function loginSso(Request $request): JsonResponse
     {
-        $request->validate([
+        // 1. Jika request mengirim 'token' JWT SSO
+        if ($request->filled('token')) {
+            $result = $this->ssoService->verifyToken($request->token);
+
+            if (! $result['success']) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => $result['message'] ?? 'Verifikasi token SSO gagal',
+                ], $result['status'] ?? 401);
+            }
+
+            $user = $this->ssoService->syncUserFromSso($result['data']);
+
+            return $this->respondWithToken($user, 'Login SSO berhasil');
+        }
+
+        // 2. Jika request mengirim username & password
+        $validator = Validator::make($request->all(), [
             'username' => 'required|string',
             'password' => 'required|string',
         ]);
 
+        if ($validator->fails()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Parameter tidak lengkap',
+                'errors' => $validator->errors(),
+            ], 422);
+        }
+
         $username = $request->username;
         $password = $request->password;
 
-        // // Step 1: Cek API 1
-        // $key1=env('B2B_API_KEY_HRMS');
-        // $api1Data = $this->checkExternalApi(env('B2B_HRMS_URL'),$key1,$username, $password);
-        // if ($api1Data) {
-        //     $user = $this->syncUser($username, $password, $api1Data, 'API_1');
-        //     return $this->respondWithToken($user, 'Login berhasil via API 1');
-        // }
+        // Coba login Sandbox SSO jika password sandbox / dev diberikan
+        if (in_array($username, ['100001', '100002', '100000001']) || $request->boolean('sandbox')) {
+            $sandboxResult = $this->ssoService->loginSandbox($username, $password);
+            if ($sandboxResult['success'] && isset($sandboxResult['user'])) {
+                return $this->respondWithToken($sandboxResult['user'], 'Login SSO Sandbox berhasil');
+            }
+        }
 
-        // // Step 2: Cek API 2 (Ubah URL/endpoint sesuai API 2 milikmu)
-        // $key2=env('B2B_API_KEY_MHS');
-        // $api2Data = $this->checkExternalApi(env('B2B_MHS_URL'),$key2, $username, $password);
-        // if ($api2Data) {
-        //     $user = $this->syncUser($username, $password, $api2Data, 'API_2');
-        //     return $this->respondWithToken($user, 'Login berhasil via API 2');
-        // }
-
-        // Step 3: Cek Database Lokal jika API 1 & API 2 gagal
+        // Cek database lokal jika bukan/gagal sandbox
         $user = User::where('username', $username)->first();
         if ($user && Hash::check($password, $user->password)) {
-            return $this->respondWithToken($user, 'Login berhasil via DB Lokal');
+            return $this->respondWithToken($user, 'Login database lokal berhasil');
         }
 
-        // Step 4: Jika semua cara gagal
         return response()->json([
-            'status'  => 'error',
+            'status' => 'error',
             'message' => 'Username atau password salah',
         ], 401);
-
-        
-
-
     }
 
     /**
-     * Helper untuk HTTP Request ke API External
+     * Registrasi pengguna baru.
      */
-    private function checkExternalApi(string $url,string $key, string $username, string $password): ?array
+    public function register(Request $request): JsonResponse
     {
-        try {
-            $response = Http::withHeaders([
-                'api-key'      => $key,
-                'Accept'       => 'application/json',
-                'Content-Type' => 'application/json',
-            ])->post($url, [
-                'username' => $username,
-                'password' => $password,
-            ]);
-
-            if ($response->successful()) {
-                return $response->json();
-            }
-        } catch (\Exception $e) {
-            // Log error jika API down/timeout
-        }
-
-        return null;
-    }
-
-    /**
-     * Update atau Create data User ke DB Lokal
-     */
-    // private function syncUser(string $username, string $password, array $apiResponse, string $source): User
-    // {
-    //     // Sesuaikan mapping field dari response API kamu
-    //     $userData = $apiResponse['data'] ?? $apiResponse;
-    //         // Tangkap kode dan nama sub lembaga menggunakan data_get
-    //     $kdSubLembaga   = data_get($userData, 'penugasan.0.kd_sub_lembaga', 'DEFAULT');
-    //     $namaSubLembaga = data_get($userData, 'penugasan.0.nama_sub_lembaga', 'General');
-
-    //     return User::updateOrCreate(
-    //         ['username' => $username],
-    //         [
-    //             'name'     => $userData['nama'] ?? $username,
-    //             'email'    => $userData['email'] ?? "{$username}@example.com",
-    //             'tlp'=>$userData['no_hp'],
-    //             'password' => Hash::make($password), // Sync password lokal
-    //             'role_id'=>'4',
-    //             'department_id'=>$kdSubLembaga ,
-    //         ]
-    //     );
-
-    //     //login dari db
-        
-    // }
-
-    public function register(Request $request)
-    {
-        // 1. Validasi Input Registrasi
         $validator = Validator::make($request->all(), [
-            'username'      => 'required|string|max:50|unique:users,username',
-            'name'          => 'required|string|max:255',
-            'email'         => 'required|string|email|max:255|unique:users,email',
-            'password'      => 'required', 'confirmed', // Butuh input password_confirmation
-            'department_id' => 'required|string|max:20|exists:departments,kode', // Memastikan KODE jurusan/unit terdaftar
-            'tlp'           => 'nullable|string|max:20',
-            
+            'username' => 'required|string|max:50|unique:users,username',
+            'name' => 'required|string|max:255',
+            'email' => 'required|string|email|max:255|unique:users,email',
+            'password' => 'required|string|confirmed|min:6',
+            'department_id' => 'required|string|max:20|exists:departments,kode',
+            'tlp' => 'nullable|string|max:20',
         ]);
 
         if ($validator->fails()) {
             return response()->json([
                 'success' => false,
                 'message' => 'Validasi pendaftaran gagal',
-                'errors'  => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
         try {
-            // 2. Ambil ID Default untuk Role (misal: 'User' / 'Mahasiswa') dan Status (misal: 'Active')
-            // Sesuaikan nama 'User' / 'Active' dengan isi data pada tabel roles & statuses Anda
-       
-
-            // 3. Simpan User Baru
             $user = User::create([
-                'username'      => $request->username,
-                'name'          => $request->name,
-                'email'         => $request->email,
-                'password'      => Hash::make($request->password),
-                'role_id'       => '1',
-                'status_id'     => '1',
-                'department_id' => $request->department_id, // Berisi kode VARCHAR(20)
-                'tlp'           => $request->tlp,
+                'username' => $request->username,
+                'name' => $request->name,
+                'email' => $request->email,
+                'password' => Hash::make($request->password),
+                'role_id' => 4,
+                'department_id' => $request->department_id,
+                'tlp' => $request->tlp,
             ]);
 
-            // 4. Buat Access Token (Laravel Sanctum)
-            $token = $user->createToken('auth_token')->plainTextToken;
-
-            // 5. Muat Relasi untuk Respons
-            $user->load(['role', 'status', 'department']);
-
-            return response()->json([
-                'success'      => true,
-                'message'      => 'Registrasi berhasil',
-                'access_token' => $token,
-                'token_type'   => 'Bearer',
-                'data'         => $user
-            ], 201);
-
-        } catch (\Exception $e) {
+            return $this->respondWithToken($user, 'Registrasi berhasil');
+        } catch (\Throwable $e) {
             return response()->json([
                 'success' => false,
                 'message' => 'Gagal melakukan registrasi pengguna',
-                'error'   => $e->getMessage()
+                'error' => $e->getMessage(),
             ], 500);
         }
     }
 
-    private function syncUser(string $username, string $password, array $apiResponse, string $source): User
-{
-    // Sesuaikan mapping field dari response API
-    $userData = $apiResponse['data'] ?? $apiResponse;
-
-    // Cari user berdasarkan username
-    $user = User::where('username', $username)->first();
-
-    if ($user) {    
-        // Jika user SUDAH ADA: hanya update password
-        $user->update([
-            'password' => Hash::make($password),
-        ]);
-
-        return $user;
-    }
-
-    // Tangkap kode dan nama sub lembaga menggunakan data_get untuk user BARU
-    $kdSubLembaga   = data_get($userData, 'penugasan.0.kd_sub_lembaga', 'DEFAULT');
-    //$namaSubLembaga = data_get($userData, 'penugasan.0.nama_sub_lembaga', 'General');
-    $kdSubLembaga = $user_data['penugasan'][0]['kd_sub_lembaga'] ?? null;
-    $email=$user_data['email']?? null;
-
-    $kdSubLembaga = data_get($userData, 'penugasan.0.kd_sub_lembaga');
-    // $nama = data_get($userData, 'nama');
-    // $email = data_get($userData, 'email');
-   
-      
-    // Jika user BELUM ADA: buat user baru dengan data lengkap
-    return User::create([
-        'username'      => $username,
-        'name'          => $userData['nama'] ?? $username,
-        'email'         => $userData['email']??null ,
-        'tlp'           => $userData['no_hp'] ?? null,
-        'password'      => Hash::make($password),
-        'role_id'       => 4,
-        'department_id' =>$kdSubLembaga,
-    ]);
-}
-
     /**
-     * Helper Response Token (Sanctum/Passport)
+     * Helper Response Token Sanctum
      */
     private function respondWithToken(User $user, string $message): JsonResponse
     {
-        // Jika menggunakan Laravel Sanctum:
-        $token = $user->createToken('sso-token')->plainTextToken;
-         $user->load(['role', 'department']);
+        $token = $user->createToken('auth_token')->plainTextToken;
+        $user->load(['role', 'department']);
 
         return response()->json([
-             'status'       => 'success',
-            'message'      => $message,
-            'data'         => $user,
+            'status' => 'success',
+            'message' => $message,
+            'data' => $user,
             'access_token' => $token,
-            'token_type'   => 'Bearer'
-        ]);
-
-       
+            'token_type' => 'Bearer',
+        ], 200);
     }
-
-
-    
 }

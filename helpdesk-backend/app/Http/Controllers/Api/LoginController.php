@@ -7,7 +7,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Validator;
 
-class B2bApiController extends Controller
+class LoginController extends Controller
 {
     /**
      * Memanggil API Eksternal B2B menggunakan Header api-key
@@ -22,9 +22,9 @@ class B2bApiController extends Controller
 
         if ($validator->fails()) {
             return response()->json([
-                'status'  => 'error',
+                'status' => 'error',
                 'message' => 'Validasi gagal',
-                'errors'  => $validator->errors()
+                'errors' => $validator->errors(),
             ], 422);
         }
 
@@ -37,9 +37,9 @@ class B2bApiController extends Controller
             $response = Http::timeout(10)
                 ->withHeaders([
                     'api-key' => $apiKey,              // Sesuai dengan Name: api-key pada gambar
-                    'Accept'  => 'application/json',
+                    'Accept' => 'application/json',
                 ])
-                ->post($apiUrl . '/login', [          // Sesuaikan endpoint path jika ada (misal: /login atau /auth/login)
+                ->post($apiUrl.'/login', [          // Sesuaikan endpoint path jika ada (misal: /login atau /auth/login)
                     'username' => $request->username,
                     'password' => $request->password,
                 ]);
@@ -47,24 +47,24 @@ class B2bApiController extends Controller
             // 4. Jika Request Berhasil (Status 2xx)
             if ($response->successful()) {
                 return response()->json([
-                    'status'  => 'success',
+                    'status' => 'success',
                     'message' => 'Akses API B2B Berhasil',
-                    'data'    => $response->json()
+                    'data' => $response->json(),
                 ], 200);
             }
 
             // 5. Jika API merespons dengan status error (401, 403, 500, dll)
             return response()->json([
-                'status'        => 'error',
-                'message'       => 'Otorisasi API B2B gagal atau kredensial salah',
-                'error_details' => $response->json()
+                'status' => 'error',
+                'message' => 'Otorisasi API B2B gagal atau kredensial salah',
+                'error_details' => $response->json(),
             ], $response->status());
 
         } catch (\Exception $e) {
             // 6. Penanganan jika server API B2B tidak dapat dijangkau / timeout
             return response()->json([
-                'status'  => 'error',
-                'message' => 'Gagal terhubung ke server API B2B: ' . $e->getMessage()
+                'status' => 'error',
+                'message' => 'Gagal terhubung ke server API B2B: '.$e->getMessage(),
             ], 500);
         }
     }

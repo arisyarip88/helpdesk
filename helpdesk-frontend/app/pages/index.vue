@@ -1,5 +1,5 @@
 <script setup>
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
 
 const config = useRuntimeConfig()
 
@@ -11,7 +11,9 @@ const toggleDarkMode = () => {
 }
 
 // --- State Modal Login ---
-const { login } = useAuth()
+const { login, redirectToSso } = useAuth()
+const route = useRoute()
+const isSsoLoading = ref(false)
 const isLoginModalOpen = ref(false)
 const loginForm = ref({ username: '', password: '', remember: false })
 const isLoading = ref(false)
@@ -63,6 +65,17 @@ onMounted(() => {
       loginForm.value.remember = true
     }
     window.addEventListener('click', handleClickOutside)
+
+    if (route.query.error) {
+      openLoginModal()
+      if (route.query.error === 'sso_unauthorized') {
+        errorMessage.value = 'Autentikasi SSO gagal. Token tidak valid atau sesi telah kedaluwarsa.'
+      } else if (route.query.error === 'sso_server_error') {
+        errorMessage.value = 'Layanan SSO UNPAM sedang gangguan sementara.'
+      } else {
+        errorMessage.value = 'Gagal masuk menggunakan SSO.'
+      }
+    }
   }
 })
 
@@ -74,9 +87,14 @@ onUnmounted(() => {
 
 const openLoginModal = () => {
   errorMessage.value = ''
+  complaintOpen.value = false
   isLoginModalOpen.value = true
 }
 const closeLoginModal = () => { isLoginModalOpen.value = false }
+const handleSsoRedirect = () => {
+  isSsoLoading.value = true
+  redirectToSso()
+}
 
 const handleLogin = async () => {
   isLoading.value = true
@@ -183,10 +201,98 @@ const isHtml = (content) => {
 }
 
 // Otomatis membuka chatbot 1 detik setelah halaman dimuat
-onMounted(() => {
-  setTimeout(() => {
-    toggleChatbot()
-  }, 2000)
+// onMounted(() => {
+//   setTimeout(() => {
+//     toggleChatbot()
+//   }, 2000)
+// })
+// --- Pengaduan Umum ---
+const complaintOpen = ref(false)
+const complaintCategories = ref([])
+const complaintCaptcha = ref({ token: '', question: '' })
+const complaintFile = ref(null)
+const complaintFileRef = ref(null)
+const complaintLoading = ref(false)
+const complaintSuccess = ref('')
+const complaintError = ref('')
+const complaintErrors = ref({})
+const complaintForm = ref({ name: '', phone: '', email: '', category_id: '', description: '', captcha_answer: '' })
+
+const categorySearch = ref('')
+const categoryOpen = ref(false)
+const categoryBoxRef = ref(null)
+const filteredCategories = computed(() => {
+  const q = categorySearch.value.trim().toLowerCase()
+  return complaintCategories.value.filter(c => c.name.toLowerCase().includes(q))
+})
+const selectCategory = (c) => {
+  complaintForm.value.category_id = c.id
+  categorySearch.value = c.name
+  categoryOpen.value = false
+}
+const closeCategoryOnOutside = (e) => {
+  if (categoryBoxRef.value && !categoryBoxRef.value.contains(e.target)) categoryOpen.value = false
+}
+onMounted(() => document.addEventListener('click', closeCategoryOnOutside))
+onUnmounted(() => document.removeEventListener('click', closeCategoryOnOutside))
+const ticketGuide = [
+  { title: 'Masuk dengan akun satu.unpam', desc: 'Login menggunakan username dan kata sandi akun Anda.' },
+  { title: 'Buat tiket aduan', desc: 'Pilih kategori, tulis judul dan deskripsi kendala, lalu lampirkan bukti bila ada.' },
+  { title: 'Tiket diteruskan ke petugas', desc: 'Sistem mengalokasikan tiket ke departemen dan petugas yang sesuai.' },
+  { title: 'Pantau & berdiskusi', desc: 'Lihat perkembangan status tiket, serta berkomunikasi langsung dengan petugas lewat kolom chat dan notifikasi.' },
+  { title: 'Tiket diselesaikan', desc: 'Petugas menandai tiket selesai setelah kendala tertangani.' },
+  { title: 'Beri penilaian', desc: 'Berikan rating layanan untuk membantu kami meningkatkan kualitas support.' }
+]
+const loadCaptcha = async () => {
+  try {
+    complaintCaptcha.value = await $fetch(`${config.public.apiBase}/public/complaints/captcha`)
+    complaintForm.value.captcha_answer = ''
+  } catch (e) {
+    complaintCaptcha.value = { token: '', question: 'Gagal memuat captcha' }
+  }
+}
+
+const onComplaintFile = (e) => {
+  complaintFile.value = e.target.files?.[0] || null
+}
+
+const submitComplaint = async () => {
+  if (!complaintForm.value.category_id) {
+    complaintError.value = 'Pilih kategori dari daftar.'
+    return
+  }
+  complaintLoading.value = true
+  complaintError.value = ''
+  complaintSuccess.value = ''
+  complaintErrors.value = {}
+  try {
+    const body = new FormData()
+    Object.entries(complaintForm.value).forEach(([k, v]) => body.append(k, v))
+    body.append('captcha_token', complaintCaptcha.value.token)
+    if (complaintFile.value) body.append('attachment', complaintFile.value)
+
+    await $fetch(`${config.public.apiBase}/public/complaints`, { method: 'POST', body, headers: { Accept: 'application/json' } })
+    complaintSuccess.value = 'Pengaduan Anda berhasil dikirim. Terima kasih.'
+    complaintForm.value = { name: '', phone: '', email: '', category_id: '', description: '', captcha_answer: '' }
+    complaintFile.value = null
+    categorySearch.value = ''
+    if (complaintFileRef.value) complaintFileRef.value.value = ''
+  } catch (err) {
+    complaintErrors.value = err.data?.errors || {}
+    complaintError.value = err.data?.message || 'Gagal mengirim pengaduan. Silakan coba lagi.'
+  } finally {
+    complaintLoading.value = false
+    loadCaptcha()
+  }
+}
+
+onMounted(async () => {
+  loadCaptcha()
+  try {
+    complaintCategories.value = await $fetch(`${config.public.apiBase}/public/categories`)
+  } catch (e) {
+    complaintCategories.value = []
+  }
 })
 </script>
 
@@ -214,6 +320,7 @@ onMounted(() => {
 
         <nav class="hidden md:flex items-center gap-8 text-sm font-medium text-slate-600 dark:text-slate-300">
           <a href="#fitur" class="hover:text-indigo-600 dark:hover:text-white transition">Fitur Utama</a>
+          <button @click="complaintOpen = true" class="hover:text-indigo-600 dark:hover:text-white transition cursor-pointer">Pengaduan</button>
           <button
             @click="openLoginModal"
             class="hover:text-indigo-600 dark:hover:text-white transition cursor-pointer">Admin Panel</button>
@@ -238,7 +345,7 @@ onMounted(() => {
     </header>
 
     <!-- Hero Section -->
-    <section class="pt-20 pb-24 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto text-center">
+    <section class="pt-10 pb-8 px-4 sm:px-6 lg:px-8 max-w-6xl mx-auto text-center">
       <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-100 dark:border-indigo-500/20 text-indigo-700 dark:text-indigo-300 text-xs font-semibold mb-8">
         <span class="flex h-2 w-2 rounded-full bg-indigo-600 dark:bg-emerald-400 animate-pulse"></span>
         Sistem Layanan Aduan & Support
@@ -252,15 +359,10 @@ onMounted(() => {
         Laporkan kendala Anda, lacak progres perbaikan secara berkala, dan berkomunikasi secara langsung dengan tim teknis kami.
       </p>
 
-      <div class="mt-10 flex flex-col sm:flex-row gap-4 justify-center items-center">
-        <button @click="openLoginModal" class="w-full sm:w-auto px-8 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold shadow-md shadow-indigo-600/20 transition text-sm cursor-pointer">
-          Buat Tiket Baru
-        </button>
-      </div>
     </section>
 
     <!-- Fitur Section -->
-    <section id="fitur" class="py-20 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+    <section id="fitur" class="pt-4 pb-10 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
       <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div v-for="(feat, idx) in features" :key="idx" class="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-sm">
           <div class="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center mb-4">
@@ -274,25 +376,173 @@ onMounted(() => {
       </div>
     </section>
 
-    <!-- Modal Login Popup -->
-    <Teleport to="body">
-      <div 
-        v-if="isLoginModalOpen" 
-        class="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4" 
-        @click.self="closeLoginModal"
-      >
-        <div class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 w-full max-w-md rounded-2xl p-6 sm:p-8 shadow-2xl relative">
-          <button @click="closeLoginModal" class="absolute top-4 right-4 text-slate-400 hover:text-slate-600 dark:hover:text-white p-2 cursor-pointer">✕</button>
-          <h3 class="text-xl font-bold text-slate-900 dark:text-white text-center mb-6">Masuk Akun</h3>
-          <p class="text-sm text-slate-500 dark:text-slate-400 text-center mt-1 mb-6">
-  Gunakan username dan password akun satu.unpam
-</p>
+    <!-- Shortcut Pengaduan (sisi kiri) + panel slide ke kanan -->
+    <button
+      @click="complaintOpen = true"
+      aria-label="Buka form pengaduan"
+      title="Pengaduan Umum" class="fixed left-0 top-1/2 -translate-y-1/2 z-30 w-20 h-20 flex flex-col items-center justify-center gap-1 rounded-r-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-600/30 hover:w-24 transition-all duration-300 cursor-pointer"
+      :class="{ 'opacity-0 pointer-events-none': complaintOpen || isLoginModalOpen }"
+    >
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 8h10M7 12h6m-9 8l3-3h11a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v14z" /></svg>
+      <span class="text-[11px] font-bold leading-tight text-center">Pengaduan<br>Umum</span>
+    </button>
 
-          <div v-if="errorMessage" class="mb-4 p-3 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-medium border border-rose-200 dark:border-rose-900">
+    <button
+      @click="openLoginModal"
+      aria-label="Buka form login"
+      title="Masuk"
+      class="fixed left-0 top-[calc(50%+3.25rem)] z-30 w-20 h-20 flex flex-col items-center justify-center gap-1 rounded-r-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-600/30 hover:w-24 transition-all duration-300 cursor-pointer"
+      :class="{ 'opacity-0 pointer-events-none': complaintOpen || isLoginModalOpen }"
+    >
+      <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" /></svg>
+      <span class="text-[11px] font-bold leading-tight text-center">Masuk<br>Akun</span>
+    </button>
+    <Transition name="fade">
+      <div v-if="complaintOpen" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px]" @click="complaintOpen = false"></div>
+    </Transition>
+
+    <aside
+      id="pengaduan"
+      class="fixed left-0 top-0 h-full w-full lg:w-1/2 sm:w-3/4 z-50 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col transition-transform duration-500 ease-out"
+      :class="complaintOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <button
+        @click="complaintOpen = false"
+        aria-label="Tutup form pengaduan"
+        title="Tutup"
+        class="absolute top-1/2 right-0 sm:-right-8 -translate-y-1/2 w-8 h-16 flex items-center justify-center rounded-r-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg transition-opacity duration-300 cursor-pointer"
+        :class="complaintOpen ? 'opacity-100 delay-300' : 'opacity-0 pointer-events-none'"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M15 19l-7-7 7-7" /></svg>
+      </button>
+      <div class="relative px-6 py-5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+        <h2 class="text-xl font-bold">Pengaduan Umum</h2>
+        <p class="text-xs text-indigo-100 mt-1">Sampaikan pengaduan Anda tanpa perlu login.</p>
+        <p class="text-xs text-indigo-100 mt-1">Jika anda civitas Universitas Pamulang (mahasiswa, dosen, staf), Sillahkan  membuat ticket untuk Penanganan yang lebih efektif dan dapat dimonitor secara langsung.</p>
+      </div>
+      <div class="flex-1 overflow-y-auto p-6">
+        <div v-if="complaintSuccess" class="mb-4 p-3 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 rounded-xl text-xs font-medium border border-emerald-200 dark:border-emerald-900">{{ complaintSuccess }}</div>
+        <div v-if="complaintError" class="mb-4 p-3 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-medium border border-rose-200 dark:border-rose-900">
+          {{ complaintError }}
+          <ul v-if="Object.keys(complaintErrors).length" class="list-disc ml-4 mt-1">
+            <li v-for="(msgs, key) in complaintErrors" :key="key">{{ msgs[0] }}</li>
+          </ul>
+        </div>
+
+        <form @submit.prevent="submitComplaint" class="space-y-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Nama</label>
+              <input v-model="complaintForm.name" type="text" required maxlength="150" placeholder="Nama lengkap" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">No. Telepon</label>
+              <input v-model="complaintForm.phone" type="tel" required maxlength="30" placeholder="08xxxxxxxxxx" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Email</label>
+              <input v-model="complaintForm.email" type="email" required maxlength="150" placeholder="nama@email.com" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Kategori</label>
+              <div ref="categoryBoxRef" class="relative">
+                <input
+                  v-model="categorySearch"
+                  type="text"
+                  autocomplete="off"
+                  placeholder="Cari & pilih kategori"
+                  class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  @focus="categoryOpen = true"
+                  @input="categoryOpen = true; complaintForm.category_id = ''"
+                  @keydown.esc="categoryOpen = false"
+                />
+                <ul v-if="categoryOpen" class="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg text-sm">
+                  <li v-for="c in filteredCategories" :key="c.id" @mousedown.prevent="selectCategory(c)" class="px-3.5 py-2 cursor-pointer hover:bg-indigo-50 dark:hover:bg-slate-700" :class="{ 'font-semibold text-indigo-600': c.id === complaintForm.category_id }">{{ c.name }}</li>
+                  <li v-if="!filteredCategories.length" class="px-3.5 py-2 text-slate-400">Kategori tidak ditemukan</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Deskripsi Aduan</label>
+            <textarea v-model="complaintForm.description" required minlength="10" maxlength="5000" rows="5" placeholder="Jelaskan pengaduan Anda" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"></textarea>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Lampiran (opsional, maks 5MB: jpg, png, pdf, doc, docx)</label>
+            <input ref="complaintFileRef" type="file" accept=".jpg,.jpeg,.png,.pdf,.doc,.docx" @change="onComplaintFile" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Captcha</label>
+            <div class="flex items-center gap-3">
+              <span class="px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 font-mono font-bold text-sm select-none">{{ complaintCaptcha.question }}</span>
+              <input v-model="complaintForm.captcha_answer" type="number" required placeholder="Jawaban" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 max-w-[8rem]" />
+              <button type="button" @click="loadCaptcha" class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer">Muat ulang</button>
+            </div>
+          </div>
+          <button type="submit" :disabled="complaintLoading || !complaintCaptcha.token" class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm rounded-xl transition disabled:opacity-75 cursor-pointer">
+            {{ complaintLoading ? 'Mengirim...' : 'Kirim Pengaduan' }}
+          </button>
+        </form>
+      </div>
+    </aside>
+    <!-- Panel Login (slide dari kanan) -->
+    <Transition name="fade">
+      <div v-if="isLoginModalOpen" class="fixed inset-0 z-40 bg-slate-900/40 backdrop-blur-[2px]" @click="closeLoginModal"></div>
+    </Transition>
+
+    <aside
+      class="fixed left-0 top-0 h-full w-full sm:w-112 z-50 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col transition-transform duration-500 ease-out"
+      :class="isLoginModalOpen ? 'translate-x-0' : '-translate-x-full'"
+    >
+      <button
+        @click="closeLoginModal"
+        aria-label="Tutup form login"
+        title="Tutup"
+        class="absolute top-1/2 right-0 sm:-right-8 -translate-y-1/2 w-8 h-16 flex items-center justify-center rounded-r-xl bg-gradient-to-br from-indigo-600 to-violet-600 text-white shadow-lg transition-opacity duration-300 cursor-pointer"
+        :class="isLoginModalOpen ? 'opacity-100 delay-300' : 'opacity-0 pointer-events-none'"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M15 19l-7-7 7-7" /></svg>
+      </button>
+      <div class="px-6 py-5 bg-gradient-to-r from-indigo-600 to-violet-600 text-white">
+        <h2 class="text-xl font-bold">Masuk Akun</h2>
+        <p class="text-xs text-indigo-100 mt-1">Gunakan akun SSO UNPAM atau akun lokal</p>
+      </div>
+      <div class="flex-1 overflow-y-auto p-6 sm:p-8 w-full">
+        <div v-if="errorMessage" class="mb-4 p-3 bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 rounded-xl text-xs font-medium border border-rose-200 dark:border-rose-900">
             {{ errorMessage }}
           </div>
 
-          <form @submit.prevent="handleLogin" class="space-y-4">
+        <!-- Tombol Login SSO UNPAM (Dosen / Mahasiswa / Tendik) -->
+        <div class="mb-6 space-y-2.5">
+          <button
+            type="button"
+            :disabled="isSsoLoading"
+            @click="handleSsoRedirect"
+            class="w-full py-3.5 px-4 bg-gradient-to-r from-blue-700 via-indigo-600 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white font-semibold text-sm rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-between cursor-pointer group disabled:opacity-75"
+          >
+            <div class="flex items-center gap-3">
+              <img src="/unpam.png" alt="UNPAM" class="w-6 h-6 object-contain rounded bg-white p-0.5 shrink-0" />
+              <div class="text-left">
+                <div class="font-bold leading-tight">Masuk dengan SSO UNPAM</div>
+                <div class="text-[10px] text-indigo-200 font-normal">Dosen, Mahasiswa, Pegawai / Tendik</div>
+              </div>
+            </div>
+            <svg class="w-5 h-5 text-white/80 group-hover:translate-x-1 transition-transform shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+            </svg>
+          </button>
+          <p class="text-[11px] text-center text-slate-500 dark:text-slate-400">
+            Mengarahkan ke portal login resmi SSO UNPAM
+          </p>
+        </div>
+
+        <div class="relative flex py-2 items-center mb-5">
+          <div class="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
+          <span class="flex-shrink mx-3 text-[11px] uppercase tracking-wider text-slate-400 font-medium">atau masuk akun lokal</span>
+          <div class="flex-grow border-t border-slate-200 dark:border-slate-800"></div>
+        </div>
+
+        <form @submit.prevent="handleLogin" class="space-y-4">
             <div>
               <label class="block text-xs font-semibold mb-1 text-slate-700 dark:text-slate-300">Username</label>
               <input v-model="loginForm.username" type="text" required placeholder="Masukkan username" class="w-full px-3.5 py-2.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
@@ -330,10 +580,23 @@ onMounted(() => {
               </template>
             </button>
           </form>
+
+        <!-- Panduan alur tiket aduan -->
+        <div class="mt-8 pt-6 border-t border-slate-200 dark:border-slate-800">
+          <h3 class="text-sm font-bold text-slate-900 dark:text-white">Panduan Alur Tiket Aduan</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1 mb-4">Khusus civitas Universitas Pamulang (mahasiswa, dosen, staf).</p>
+          <ol class="space-y-4">
+            <li v-for="(step, i) in ticketGuide" :key="i" class="flex gap-3">
+              <div class="shrink-0 w-7 h-7 rounded-full bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 text-xs font-bold flex items-center justify-center">{{ i + 1 }}</div>
+              <div>
+                <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">{{ step.title }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">{{ step.desc }}</p>
+              </div>
+            </li>
+          </ol>
         </div>
       </div>
-    </Teleport>
-
+    </aside>
     <!-- Modal Window Chatbot AI -->
     <Teleport to="body">
       <div 
@@ -450,3 +713,10 @@ onMounted(() => {
 
   </div>
 </template>
+
+<style scoped>
+.fade-enter-active,
+.fade-leave-active { transition: opacity 0.3s ease; }
+.fade-enter-from,
+.fade-leave-to { opacity: 0; }
+</style>
